@@ -88,7 +88,7 @@ def analyze_url(url):
     title = ''
     artist = ''
     try:
-        with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True, 'logger': _QuietLogger()}) as ydl:
+        with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True, 'logger': _QuietLogger(), 'extractor_args': {'youtube': {'player_client': ['tv_embedded']}}}) as ydl:
             info = ydl.extract_info(url, download=False)
             title = info.get('title', '')
             artist = (
@@ -119,6 +119,7 @@ def analyze_url(url):
             'no_warnings': True,
             'noprogress': True,
             'logger': _QuietLogger(),
+            'extractor_args': {'youtube': {'player_client': ['tv_embedded']}},
         }
 
         if has_ffmpeg:
