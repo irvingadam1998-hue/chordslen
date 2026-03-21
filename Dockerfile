@@ -31,7 +31,7 @@ RUN cp -r .next/static .next/standalone/.next/static && \
     cp -r public .next/standalone/public
 
 ENV NODE_ENV=production
-ENV PORT=3000
+ENV HOSTNAME=0.0.0.0
 EXPOSE 3000
 
 CMD ["node", ".next/standalone/server.js"]
