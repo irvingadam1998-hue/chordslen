@@ -132,6 +132,73 @@ def _http_download(url, dest_path, headers=None, timeout=180):
     return os.path.getsize(dest_path)
 
 
+def download_via_invidious(video_id, tmpdir):
+    """
+    Download audio via Invidious proxy with local=true.
+    Invidious fetches from YouTube CDN on THEIR server and streams to us,
+    so Railway's IP is never seen by YouTube.
+    """
+    import urllib.request
+    import json as _j
+
+    # Public instances known to have API + proxy enabled
+    INSTANCES = [
+        'https://inv.nadeko.net',
+        'https://invidious.privacyredirect.com',
+        'https://yt.cdaut.de',
+        'https://invidious.nerdvpn.de',
+        'https://invidious.io',
+        'https://vid.puffyan.us',
+        'https://invidious.lunar.icu',
+    ]
+
+    for instance in INSTANCES:
+        # Step 1: get adaptive formats list
+        try:
+            api_url = f'{instance}/api/v1/videos/{video_id}?fields=title,author,adaptiveFormats'
+            req = urllib.request.Request(api_url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                data = _j.loads(resp.read())
+        except Exception as e:
+            sys.stderr.write(f'[invidious] {instance} metadata failed: {e}\n')
+            continue
+
+        title = data.get('title', '')
+        artist = data.get('author', '')
+        formats = data.get('adaptiveFormats', [])
+        audio = [f for f in formats if f.get('type', '').startswith('audio/')]
+        if not audio:
+            sys.stderr.write(f'[invidious] {instance} no audio formats\n')
+            continue
+
+        audio.sort(key=lambda f: f.get('bitrate', 0), reverse=True)
+
+        # Step 2: download via Invidious proxy (local=true = proxied through their server)
+        for fmt in audio[:3]:
+            itag = fmt.get('itag')
+            if not itag:
+                continue
+            mime = fmt.get('type', '')
+            ext = 'webm' if ('webm' in mime or 'opus' in mime) else 'm4a'
+            audio_path = os.path.join(tmpdir, f'invidious_{itag}.{ext}')
+            proxy_url = f'{instance}/latest_version?id={video_id}&itag={itag}&local=true'
+            sys.stderr.write(f'[invidious] {instance} itag={itag} ({ext})\n')
+            try:
+                size = _http_download(proxy_url, audio_path,
+                                      headers={'Referer': instance + '/'},
+                                      timeout=240)
+                sys.stderr.write(f'[invidious] downloaded {size} bytes\n')
+                if size > 50000:
+                    return audio_path, title, artist
+                sys.stderr.write(f'[invidious] file too small ({size}), trying next\n')
+            except Exception as e:
+                sys.stderr.write(f'[invidious] download error: {e}\n')
+                continue
+
+    sys.stderr.write('[invidious] all instances failed\n')
+    return None
+
+
 def download_via_cobalt(video_id, tmpdir):
     """
     Download audio via Cobalt.tools — open-source media downloader that handles
@@ -393,17 +460,24 @@ def analyze_url(url):
 
     with tempfile.TemporaryDirectory() as tmpdir:
 
-        # ── Strategy 1: Cobalt.tools ────────────────────────────────────────
+        # ── Strategy 1: Invidious proxy (local=true hides Railway IP) ─────────
+        if video_id:
+            sys.stderr.write('[analyze_url] trying Invidious...\n')
+            inv_result = download_via_invidious(video_id, tmpdir)
+            if inv_result:
+                audio_path, title, artist = inv_result
+                return _analyze_audio(audio_path, title=title, artist=artist)
+
+        # ── Strategy 2: Cobalt.tools ────────────────────────────────────────
         if video_id:
             sys.stderr.write('[analyze_url] trying Cobalt...\n')
             cobalt_result = download_via_cobalt(video_id, tmpdir)
             if cobalt_result:
                 audio_path, _, _ = cobalt_result
-                # Cobalt doesn't return metadata; fetch via yt-dlp best-effort
                 title, artist = _fetch_metadata(url)
                 return _analyze_audio(audio_path, title=title, artist=artist)
 
-        # ── Strategy 2: Piped API ───────────────────────────────────────────
+        # ── Strategy 3: Piped API (proxied streams only) ────────────────────
         if video_id:
             sys.stderr.write('[analyze_url] trying Piped...\n')
             piped_result = download_via_piped(video_id, tmpdir)
@@ -411,7 +485,7 @@ def analyze_url(url):
                 audio_path, title, artist = piped_result
                 return _analyze_audio(audio_path, title=title, artist=artist)
 
-        # ── Strategy 3: yt-dlp with multiple clients ────────────────────────
+        # ── Strategy 4: yt-dlp with multiple clients ────────────────────────
         try:
             import yt_dlp as _yt
         except ImportError:
