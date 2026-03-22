@@ -68,12 +68,101 @@ class _QuietLogger:
     def warning(self, msg): sys.stderr.write(msg + '\n')
     def error(self, msg): sys.stderr.write(msg + '\n')
 
-def analyze_url(url):
-    try:
-        import yt_dlp
-    except ImportError:
-        return {"success": False, "error": "yt-dlp no instalado. Ejecuta: pip install yt-dlp"}
+def find_cookies_file():
+    """Look for cookies.txt in /app (Docker) or next to this script."""
+    candidates = [
+        '/app/cookies.txt',
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'cookies.txt'),
+    ]
+    for path in candidates:
+        if os.path.isfile(path):
+            return os.path.abspath(path)
+    return None
 
+def extract_video_id(url):
+    """Extract the 11-char YouTube video ID from any YouTube URL format."""
+    import re
+    patterns = [
+        r'(?:youtube\.com/watch\?v=|youtu\.be/)([a-zA-Z0-9_-]{11})',
+        r'youtube\.com/embed/([a-zA-Z0-9_-]{11})',
+        r'youtube\.com/shorts/([a-zA-Z0-9_-]{11})',
+    ]
+    for p in patterns:
+        m = re.search(p, url)
+        if m:
+            return m.group(1)
+    return None
+
+def download_via_piped(video_id, tmpdir):
+    """
+    Download audio via Piped API (piped.video open-source YouTube proxy).
+    Returns (audio_path, title, artist) or None if all instances fail.
+    Your server never contacts YouTube directly — Piped does.
+    """
+    import urllib.request
+    import urllib.error
+    import json as _json
+
+    PIPED_INSTANCES = [
+        'https://pipedapi.kavin.rocks',
+        'https://pipedapi.mha.fi',
+        'https://api.piped.projectsegfau.lt',
+        'https://pipedapi.adminforge.de',
+    ]
+
+    data = None
+    for instance in PIPED_INSTANCES:
+        try:
+            req = urllib.request.Request(
+                f'{instance}/streams/{video_id}',
+                headers={'User-Agent': 'Mozilla/5.0'},
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = _json.loads(resp.read())
+            break
+        except Exception:
+            continue
+
+    if not data:
+        return None
+
+    title = data.get('title', '')
+    artist = data.get('uploader', '')
+    audio_streams = data.get('audioStreams', [])
+    if not audio_streams:
+        return None
+
+    # Pick highest bitrate stream
+    audio_streams.sort(key=lambda x: x.get('bitrate', 0), reverse=True)
+    stream_url = audio_streams[0].get('url')
+    if not stream_url:
+        return None
+
+    # Determine extension from mimeType or default to webm
+    mime = audio_streams[0].get('mimeType', '')
+    ext = 'webm' if 'webm' in mime or 'opus' in mime else 'm4a'
+    audio_path = os.path.join(tmpdir, f'audio.{ext}')
+
+    try:
+        req = urllib.request.Request(
+            stream_url,
+            headers={
+                'User-Agent': 'Mozilla/5.0',
+                'Referer': 'https://piped.video/',
+            },
+        )
+        with urllib.request.urlopen(req, timeout=180) as resp, open(audio_path, 'wb') as f:
+            while True:
+                chunk = resp.read(65536)
+                if not chunk:
+                    break
+                f.write(chunk)
+        return audio_path, title, artist
+    except Exception:
+        return None
+
+def _analyze_audio(audio_path, title='', artist=''):
+    """Analyze a local audio file and return the chord timeline."""
     try:
         import numpy as np
     except ImportError:
@@ -84,140 +173,195 @@ def analyze_url(url):
     except ImportError:
         return {"success": False, "error": "librosa no instalado. Ejecuta: pip install librosa soundfile"}
 
-    # Extract metadata (title/artist) before downloading
-    title = ''
-    artist = ''
+    templates = make_chord_templates()
+
+    # Use lower sample rate for speed; cap at 6 minutes to avoid timeout
+    MAX_DURATION = 360
     try:
-        with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True, 'logger': _QuietLogger(), 'extractor_args': {'youtube': {'player_client': ['tv_embedded']}}}) as ydl:
-            info = ydl.extract_info(url, download=False)
-            title = info.get('title', '')
-            artist = (
-                info.get('artist') or
-                info.get('creator') or
-                info.get('uploader', '')
-            )
+        y, sr = librosa.load(audio_path, sr=11025, mono=True, duration=MAX_DURATION)
+    except Exception as e:
+        return {"success": False, "error": f"Error al cargar el audio: {str(e)}"}
+
+    # Larger hop for speed; 2-second windows
+    hop_length = 1024
+    chroma = librosa.feature.chroma_cqt(y=y, sr=sr, hop_length=hop_length)
+
+    window_size = 2.0
+    frames_per_window = max(1, int(window_size * sr / hop_length))
+    n_frames = chroma.shape[1]
+
+    raw = []
+    frame_idx = 0
+    t = 0.0
+    while frame_idx < n_frames:
+        end_idx = min(frame_idx + frames_per_window, n_frames)
+        window_chroma = chroma[:, frame_idx:end_idx].mean(axis=1)
+        chord = detect_chord_from_chroma(window_chroma, templates)
+        if chord:
+            chord = simplify_chord(chord)
+        raw.append((t, chord))
+        frame_idx += frames_per_window
+        t += window_size
+
+    # Deduplicate consecutive same chords
+    final = []
+    last_chord = None
+    for time, chord in raw:
+        if chord and chord != last_chord:
+            final.append((time, chord))
+            last_chord = chord
+
+    chords_timeline = []
+    for measure, (time, chord) in enumerate(final, start=1):
+        chords_timeline.append({
+            'time': round(time, 2),
+            'time_str': format_time(time),
+            'chord': chord,
+            'measure': measure
+        })
+
+    return {
+        "success": True,
+        "notes_count": n_frames,
+        "chords_timeline": chords_timeline,
+        "title": title,
+        "artist": artist,
+    }
+
+
+def analyze_file_path(path):
+    """Analyze a local audio file directly (no YouTube download needed)."""
+    if not os.path.isfile(path):
+        return {"success": False, "error": f"Archivo no encontrado: {path}"}
+    title = os.path.splitext(os.path.basename(path))[0]
+    return _analyze_audio(path, title=title, artist='')
+
+
+def _ytdlp_download(url, tmpdir, player_clients, cookies_file=None):
+    """Attempt yt-dlp download with the given player_clients list. Returns audio_path or None."""
+    try:
+        import yt_dlp
+    except ImportError:
+        return None
+
+    # Locate ffmpeg
+    ffmpeg_path = shutil.which('ffmpeg')
+    if not ffmpeg_path:
+        winget_ffmpeg = os.path.expandvars(
+            r'%LOCALAPPDATA%\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.1-full_build\bin\ffmpeg.exe'
+        )
+        if os.path.isfile(winget_ffmpeg):
+            ffmpeg_path = winget_ffmpeg
+            os.environ['PATH'] = os.path.dirname(ffmpeg_path) + os.pathsep + os.environ.get('PATH', '')
+
+    base_opts = {
+        'outtmpl': os.path.join(tmpdir, 'audio.%(ext)s'),
+        'quiet': True,
+        'no_warnings': True,
+        'noprogress': True,
+        'logger': _QuietLogger(),
+        'extractor_args': {'youtube': {'player_client': player_clients}},
+    }
+    if cookies_file:
+        base_opts['cookiefile'] = cookies_file
+
+    if ffmpeg_path:
+        ydl_opts = {
+            **base_opts,
+            'format': 'bestaudio/best',
+            'ffmpeg_location': os.path.dirname(ffmpeg_path),
+            'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'wav'}],
+        }
+    else:
+        ydl_opts = {
+            **base_opts,
+            'format': 'bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio',
+        }
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
     except Exception:
-        pass
+        return None
+
+    files = [f for f in os.listdir(tmpdir) if os.path.isfile(os.path.join(tmpdir, f))]
+    return os.path.join(tmpdir, files[0]) if files else None
+
+
+def analyze_url(url):
+    video_id = extract_video_id(url)
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        # Look for ffmpeg in PATH or common WinGet install location
-        ffmpeg_path = shutil.which('ffmpeg')
-        if not ffmpeg_path:
-            winget_ffmpeg = os.path.expandvars(
-                r'%LOCALAPPDATA%\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.1-full_build\bin\ffmpeg.exe'
-            )
-            if os.path.isfile(winget_ffmpeg):
-                ffmpeg_path = winget_ffmpeg
-                ffmpeg_dir = os.path.dirname(ffmpeg_path)
-                os.environ['PATH'] = ffmpeg_dir + os.pathsep + os.environ.get('PATH', '')
 
-        has_ffmpeg = ffmpeg_path is not None
+        # ── Strategy 1: Piped API (no direct YouTube contact) ──────────────
+        if video_id:
+            piped_result = download_via_piped(video_id, tmpdir)
+            if piped_result:
+                audio_path, title, artist = piped_result
+                return _analyze_audio(audio_path, title=title, artist=artist)
 
-        base_opts = {
-            'outtmpl': os.path.join(tmpdir, 'audio.%(ext)s'),
-            'quiet': True,
-            'no_warnings': True,
-            'noprogress': True,
-            'logger': _QuietLogger(),
-            'extractor_args': {'youtube': {'player_client': ['tv_embedded']}},
-        }
-
-        if has_ffmpeg:
-            ffmpeg_dir = os.path.dirname(ffmpeg_path)
-            ydl_opts = {
-                **base_opts,
-                'format': 'bestaudio/best',
-                'ffmpeg_location': ffmpeg_dir,
-                'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'wav',
-                }],
-            }
-        else:
-            ydl_opts = {
-                **base_opts,
-                'format': 'bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio',
-            }
-
+        # ── Strategy 2: yt-dlp with android/ios clients ────────────────────
         try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([url])
-        except Exception as e:
-            return {"success": False, "error": f"Error al descargar el audio: {str(e)}"}
+            import yt_dlp as _yt
+            yt_available = True
+        except ImportError:
+            yt_available = False
 
-        files = [f for f in os.listdir(tmpdir) if os.path.isfile(os.path.join(tmpdir, f))]
-        if not files:
-            return {"success": False, "error": "No se pudo obtener el audio. Instala ffmpeg para mejor compatibilidad."}
+        if not yt_available:
+            return {"success": False, "error": "No se pudo obtener el audio. yt-dlp no instalado y Piped falló."}
 
-        audio_path = os.path.join(tmpdir, files[0])
+        cookies_file = find_cookies_file()
 
-        # Use lower sample rate for speed; cap at 6 minutes to avoid timeout
-        MAX_DURATION = 360
-        try:
-            y, sr = librosa.load(audio_path, sr=11025, mono=True, duration=MAX_DURATION)
-        except Exception as e:
-            if not has_ffmpeg:
-                return {"success": False, "error": f"No se pudo cargar el audio. Instala ffmpeg (https://ffmpeg.org) y agregalo al PATH. Detalle: {str(e)}"}
-            return {"success": False, "error": f"Error al cargar el audio: {str(e)}"}
+        # Fetch metadata separately (best-effort)
+        title, artist = '', ''
+        for client in (['android'], ['ios'], ['tv_embedded']):
+            try:
+                meta_opts = {
+                    'quiet': True, 'no_warnings': True, 'logger': _QuietLogger(),
+                    'extractor_args': {'youtube': {'player_client': client}},
+                }
+                if cookies_file:
+                    meta_opts['cookiefile'] = cookies_file
+                with _yt.YoutubeDL(meta_opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
+                    title = info.get('title', '')
+                    artist = info.get('artist') or info.get('creator') or info.get('uploader', '')
+                break
+            except Exception:
+                continue
 
-        templates = make_chord_templates()
+        # Try download with each client in order until one succeeds
+        yt_strategies = [
+            ['android'],
+            ['ios'],
+            ['android_embedded'],
+            ['tv_embedded'],
+        ]
+        audio_path = None
+        for clients in yt_strategies:
+            subdir = tempfile.mkdtemp(dir=tmpdir)
+            audio_path = _ytdlp_download(url, subdir, clients, cookies_file)
+            if audio_path:
+                break
 
-        # Larger hop for speed; 2-second windows
-        hop_length = 1024
-        chroma = librosa.feature.chroma_cqt(y=y, sr=sr, hop_length=hop_length)
+        if not audio_path:
+            return {"success": False, "error": "YouTube bloqueó la descarga. Intentá subir el archivo de audio manualmente."}
 
-        window_size = 2.0
-        frames_per_window = max(1, int(window_size * sr / hop_length))
-        n_frames = chroma.shape[1]
+        return _analyze_audio(audio_path, title=title, artist=artist)
 
-        # Step 1: detect chord per 2-second window
-        raw = []
-        frame_idx = 0
-        t = 0.0
-        while frame_idx < n_frames:
-            end_idx = min(frame_idx + frames_per_window, n_frames)
-            window_chroma = chroma[:, frame_idx:end_idx].mean(axis=1)
-            chord = detect_chord_from_chroma(window_chroma, templates)
-            if chord:
-                chord = simplify_chord(chord)
-            raw.append((t, chord))
-            frame_idx += frames_per_window
-            t += window_size
-
-        total_duration = t
-
-        # Deduplicate consecutive same chords — show all changes
-        final = []
-        last_chord = None
-        for time, chord in raw:
-            if chord and chord != last_chord:
-                final.append((time, chord))
-                last_chord = chord
-
-        # Step 6: build final timeline
-        chords_timeline = []
-        for measure, (time, chord) in enumerate(final, start=1):
-            chords_timeline.append({
-                'time': round(time, 2),
-                'time_str': format_time(time),
-                'chord': chord,
-                'measure': measure
-            })
-
-        return {
-            "success": True,
-            "notes_count": n_frames,
-            "chords_timeline": chords_timeline,
-            "title": title,
-            "artist": artist,
-        }
 
 if __name__ == '__main__':
     if len(sys.argv) < 2:
-        print(json.dumps({"success": False, "error": "URL no proporcionada"}))
+        print(json.dumps({"success": False, "error": "Uso: analyze.py <url> | analyze.py --file <ruta>"}))
         sys.exit(1)
 
-    url = sys.argv[1]
-    result = analyze_url(url)
+    if sys.argv[1] == '--file':
+        if len(sys.argv) < 3:
+            print(json.dumps({"success": False, "error": "Ruta de archivo no proporcionada"}))
+            sys.exit(1)
+        result = analyze_file_path(sys.argv[2])
+    else:
+        result = analyze_url(sys.argv[1])
+
     sys.stdout.buffer.write(json.dumps(result, ensure_ascii=True).encode('ascii'))
     sys.stdout.buffer.write(b'\n')

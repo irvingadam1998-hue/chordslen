@@ -23,6 +23,9 @@ RUN npm ci
 # Source
 COPY . .
 
+# Copy YouTube cookies if present (optional — silently skipped if missing)
+COPY cookies.tx[t] /app/
+
 # Build Next.js
 RUN npm run build
 

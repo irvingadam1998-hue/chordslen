@@ -6,6 +6,7 @@ import ProgressSteps from '@/components/ProgressSteps'
 import ChordTimeline from '@/components/ChordTimeline'
 import ChordChart from '@/components/ChordChart'
 import YoutubePlayer from '@/components/YoutubePlayer'
+import AudioPlayer from '@/components/AudioPlayer'
 import LyricsDisplay from '@/components/LyricsDisplay'
 import TransposePanel from '@/components/TransposePanel'
 import ChordProgressBar from '@/components/ChordProgressBar'
@@ -32,6 +33,9 @@ function SectionLabel({ number, title }: { number: string; title: string }) {
 
 export default function Home() {
   const [url, setUrl] = useState('')
+  const [inputMode, setInputMode] = useState<'url' | 'file'>('url')
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const [analyzedFile, setAnalyzedFile] = useState<File | null>(null)
   const [step, setStep] = useState<1 | 2 | 3 | null>(null)
   const [result, setResult] = useState<AnalysisResult | null>(null)
   const [analyzedUrl, setAnalyzedUrl] = useState<string | null>(null)
@@ -77,8 +81,39 @@ export default function Home() {
     }
   }
 
+  const handleAnalyzeFile = async () => {
+    if (!selectedFile) return
+    setError(null)
+    setResult(null)
+    setAnalyzedUrl(null)
+    setAnalyzedFile(null)
+    setCurrentTime(-1)
+    setCapo(0)
+    setShift(0)
+    setStep(1)
+
+    const t2 = setTimeout(() => setStep(2), 2000)
+    const t3 = setTimeout(() => setStep(3), 4000)
+
+    try {
+      const formData = new FormData()
+      formData.append('audio', selectedFile)
+      const res = await fetch('/api/analyze-file', { method: 'POST', body: formData })
+      clearTimeout(t2); clearTimeout(t3)
+      const data = await res.json()
+      if (!res.ok || data.error) { setError(data.error || 'Error desconocido'); setStep(null); return }
+      setResult(data)
+      setAnalyzedFile(selectedFile)
+      setStep(null)
+    } catch (err) {
+      clearTimeout(t2); clearTimeout(t3)
+      setError(err instanceof Error ? err.message : 'Error de red')
+      setStep(null)
+    }
+  }
+
   const resetSearch = () => {
-    setResult(null); setAnalyzedUrl(null); setCurrentTime(-1); setError(null); setCapo(0); setShift(0)
+    setResult(null); setAnalyzedUrl(null); setAnalyzedFile(null); setCurrentTime(-1); setError(null); setCapo(0); setShift(0)
   }
 
   const totalDuration = result && result.chords_timeline.length > 0
@@ -117,7 +152,47 @@ export default function Home() {
                 </p>
 
                 <div className="w-full max-w-xl flex flex-col gap-3">
-                  <UrlInput url={url} onChange={setUrl} onSubmit={handleAnalyze} disabled={step !== null} />
+                  {/* Tab switcher */}
+                  <div className="flex rounded-xl bg-white/5 border border-white/10 p-1 gap-1">
+                    <button
+                      onClick={() => setInputMode('url')}
+                      className={`flex-1 py-2 rounded-lg text-xs font-semibold tracking-wider transition-all ${inputMode === 'url' ? 'bg-yellow-400 text-gray-950' : 'text-white/40 hover:text-white/70'}`}
+                    >
+                      URL de YouTube
+                    </button>
+                    <button
+                      onClick={() => setInputMode('file')}
+                      className={`flex-1 py-2 rounded-lg text-xs font-semibold tracking-wider transition-all ${inputMode === 'file' ? 'bg-yellow-400 text-gray-950' : 'text-white/40 hover:text-white/70'}`}
+                    >
+                      Subir archivo
+                    </button>
+                  </div>
+
+                  {inputMode === 'url' ? (
+                    <UrlInput url={url} onChange={setUrl} onSubmit={handleAnalyze} disabled={step !== null} />
+                  ) : (
+                    <div className="flex gap-2 w-full">
+                      <label className="flex-1 flex items-center gap-3 px-4 py-3 rounded-xl bg-white/5 border border-white/10 cursor-pointer hover:border-yellow-400/40 transition-all text-sm">
+                        <span className="text-white/40 shrink-0">MP3 / WAV / FLAC</span>
+                        <span className="text-white truncate">{selectedFile ? selectedFile.name : <span className="text-white/20">Seleccioná un archivo de audio...</span>}</span>
+                        <input
+                          type="file"
+                          accept="audio/*"
+                          className="hidden"
+                          disabled={step !== null}
+                          onChange={(e) => setSelectedFile(e.target.files?.[0] ?? null)}
+                        />
+                      </label>
+                      <button
+                        onClick={handleAnalyzeFile}
+                        disabled={step !== null || !selectedFile}
+                        className="px-5 py-3 rounded-xl bg-yellow-400 text-gray-950 font-bold text-sm tracking-widest hover:bg-yellow-300 active:scale-95 transition-all disabled:opacity-30 disabled:cursor-not-allowed whitespace-nowrap"
+                      >
+                        {step !== null ? '...' : 'ANALIZAR'}
+                      </button>
+                    </div>
+                  )}
+
                   {step !== null && <ProgressSteps currentStep={step} />}
                   {error && (
                     <div className="text-sm text-red-400 bg-red-950/40 border border-red-900/50 rounded-xl px-4 py-3 text-left">
@@ -127,7 +202,7 @@ export default function Home() {
                 </div>
 
                 <p className="text-white/20 text-xs">
-                  El análisis tarda entre 30 y 90 segundos · Compatible con cualquier video de YouTube
+                  El análisis tarda entre 30 y 90 segundos · YouTube o archivo local MP3/WAV/FLAC
                 </p>
               </div>
             </section>
@@ -232,11 +307,14 @@ export default function Home() {
             {/* 01 — Reproducción */}
             <section className="flex flex-col gap-0">
               <SectionLabel number="01" title="Reproducción" />
-              <div className={`grid gap-6 ${hasLyrics ? 'lg:grid-cols-[3fr_2fr]' : 'grid-cols-1 max-w-4xl'}`}>
+              <div className={`grid gap-6 ${hasLyrics && videoId ? 'lg:grid-cols-[3fr_2fr]' : 'grid-cols-1 max-w-4xl'}`}>
                 {videoId && (
                   <YoutubePlayer key={videoId} videoId={videoId} onTimeUpdate={setCurrentTime} seekRef={seekRef} />
                 )}
-                {hasLyrics && (
+                {analyzedFile && !videoId && (
+                  <AudioPlayer key={analyzedFile.name} file={analyzedFile} onTimeUpdate={setCurrentTime} seekRef={seekRef} />
+                )}
+                {hasLyrics && videoId && (
                   <LyricsDisplay artist={result.artist!} title={result.title!} />
                 )}
               </div>

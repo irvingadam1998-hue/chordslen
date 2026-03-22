@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run:*)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''scripts/analyze.py''\\).read\\(\\)\\); print\\(''syntax OK''\\)\")"
+    ]
+  }
+}
