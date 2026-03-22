@@ -93,14 +93,80 @@ def extract_video_id(url):
             return m.group(1)
     return None
 
-def download_via_piped(video_id, tmpdir):
+def _http_download(url, dest_path, headers=None, timeout=180):
+    """Download url to dest_path. Returns file size or raises."""
+    import urllib.request
+    h = {'User-Agent': 'Mozilla/5.0 (compatible; ChordLens/1.0)'}
+    if headers:
+        h.update(headers)
+    req = urllib.request.Request(url, headers=h)
+    with urllib.request.urlopen(req, timeout=timeout) as resp, open(dest_path, 'wb') as f:
+        while True:
+            chunk = resp.read(65536)
+            if not chunk:
+                break
+            f.write(chunk)
+    return os.path.getsize(dest_path)
+
+
+def download_via_cobalt(video_id, tmpdir):
     """
-    Download audio via Piped API (piped.video open-source YouTube proxy).
-    Returns (audio_path, title, artist) or None if all instances fail.
-    Your server never contacts YouTube directly — Piped does.
+    Download audio via Cobalt.tools — open-source media downloader that handles
+    YouTube bot detection on their end. Returns (audio_path, None, None) or None.
     """
     import urllib.request
-    import urllib.error
+    import json as _json
+
+    url = f'https://www.youtube.com/watch?v={video_id}'
+    body = _json.dumps({'url': url, 'downloadMode': 'audio'}).encode()
+    req = urllib.request.Request(
+        'https://api.cobalt.tools/',
+        data=body,
+        headers={
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (compatible; ChordLens/1.0)',
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            result = _json.loads(resp.read())
+    except Exception as e:
+        sys.stderr.write(f'[cobalt] API request failed: {e}\n')
+        return None
+
+    status = result.get('status', '')
+    sys.stderr.write(f'[cobalt] status={status}\n')
+
+    if status not in ('tunnel', 'redirect', 'stream'):
+        err = result.get('error', {})
+        sys.stderr.write(f'[cobalt] error detail: {err}\n')
+        return None
+
+    download_url = result.get('url')
+    if not download_url:
+        sys.stderr.write('[cobalt] no download URL in response\n')
+        return None
+
+    audio_path = os.path.join(tmpdir, 'audio.mp3')
+    try:
+        size = _http_download(download_url, audio_path)
+        sys.stderr.write(f'[cobalt] downloaded {size} bytes\n')
+        if size < 10000:
+            sys.stderr.write('[cobalt] file too small — likely failed\n')
+            return None
+        return audio_path, '', ''
+    except Exception as e:
+        sys.stderr.write(f'[cobalt] download failed: {e}\n')
+        return None
+
+
+def download_via_piped(video_id, tmpdir):
+    """
+    Download audio via Piped API. Returns (audio_path, title, artist) or None.
+    Note: some Piped instances return IP-locked googlevideo URLs; those are skipped.
+    """
+    import urllib.request
     import json as _json
 
     PIPED_INSTANCES = [
@@ -111,55 +177,63 @@ def download_via_piped(video_id, tmpdir):
     ]
 
     data = None
+    used_instance = None
     for instance in PIPED_INSTANCES:
         try:
             req = urllib.request.Request(
                 f'{instance}/streams/{video_id}',
                 headers={'User-Agent': 'Mozilla/5.0'},
             )
-            with urllib.request.urlopen(req, timeout=15) as resp:
+            with urllib.request.urlopen(req, timeout=20) as resp:
                 data = _json.loads(resp.read())
+            used_instance = instance
+            sys.stderr.write(f'[piped] got metadata from {instance}\n')
             break
-        except Exception:
+        except Exception as e:
+            sys.stderr.write(f'[piped] {instance} failed: {e}\n')
             continue
 
-    if not data:
+    if not data or not used_instance:
+        sys.stderr.write('[piped] all instances failed\n')
         return None
 
     title = data.get('title', '')
     artist = data.get('uploader', '')
     audio_streams = data.get('audioStreams', [])
     if not audio_streams:
+        sys.stderr.write('[piped] no audio streams in response\n')
         return None
 
-    # Pick highest bitrate stream
     audio_streams.sort(key=lambda x: x.get('bitrate', 0), reverse=True)
-    stream_url = audio_streams[0].get('url')
-    if not stream_url:
-        return None
 
-    # Determine extension from mimeType or default to webm
-    mime = audio_streams[0].get('mimeType', '')
-    ext = 'webm' if 'webm' in mime or 'opus' in mime else 'm4a'
-    audio_path = os.path.join(tmpdir, f'audio.{ext}')
+    for stream in audio_streams:
+        stream_url = stream.get('url', '')
+        if not stream_url:
+            continue
 
-    try:
-        req = urllib.request.Request(
-            stream_url,
-            headers={
-                'User-Agent': 'Mozilla/5.0',
-                'Referer': 'https://piped.video/',
-            },
-        )
-        with urllib.request.urlopen(req, timeout=180) as resp, open(audio_path, 'wb') as f:
-            while True:
-                chunk = resp.read(65536)
-                if not chunk:
-                    break
-                f.write(chunk)
-        return audio_path, title, artist
-    except Exception:
-        return None
+        # Skip direct YouTube CDN URLs — they're IP-locked to Piped's server
+        if 'googlevideo.com' in stream_url or 'youtube.com/videoplayback' in stream_url:
+            sys.stderr.write(f'[piped] skipping IP-locked CDN URL\n')
+            continue
+
+        mime = stream.get('mimeType', '')
+        ext = 'webm' if ('webm' in mime or 'opus' in mime) else 'm4a'
+        audio_path = os.path.join(tmpdir, f'audio.{ext}')
+
+        try:
+            sys.stderr.write(f'[piped] downloading proxied stream: {stream_url[:80]}\n')
+            size = _http_download(stream_url, audio_path, headers={'Referer': used_instance + '/'})
+            sys.stderr.write(f'[piped] downloaded {size} bytes\n')
+            if size < 10000:
+                sys.stderr.write('[piped] file too small\n')
+                continue
+            return audio_path, title, artist
+        except Exception as e:
+            sys.stderr.write(f'[piped] stream download failed: {e}\n')
+            continue
+
+    sys.stderr.write('[piped] all streams were IP-locked or failed\n')
+    return None
 
 def _analyze_audio(audio_path, title='', artist=''):
     """Analyze a local audio file and return the chord timeline."""
@@ -244,7 +318,6 @@ def _ytdlp_download(url, tmpdir, player_clients, cookies_file=None):
     except ImportError:
         return None
 
-    # Locate ffmpeg
     ffmpeg_path = shutil.which('ffmpeg')
     if not ffmpeg_path:
         winget_ffmpeg = os.path.expandvars(
@@ -281,73 +354,89 @@ def _ytdlp_download(url, tmpdir, player_clients, cookies_file=None):
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
-    except Exception:
+    except Exception as e:
+        sys.stderr.write(f'[yt-dlp] {player_clients} failed: {e}\n')
         return None
 
     files = [f for f in os.listdir(tmpdir) if os.path.isfile(os.path.join(tmpdir, f))]
+    if files:
+        sys.stderr.write(f'[yt-dlp] {player_clients} succeeded\n')
     return os.path.join(tmpdir, files[0]) if files else None
 
 
 def analyze_url(url):
     video_id = extract_video_id(url)
+    sys.stderr.write(f'[analyze_url] video_id={video_id}\n')
 
     with tempfile.TemporaryDirectory() as tmpdir:
 
-        # ── Strategy 1: Piped API (no direct YouTube contact) ──────────────
+        # ── Strategy 1: Cobalt.tools ────────────────────────────────────────
         if video_id:
+            sys.stderr.write('[analyze_url] trying Cobalt...\n')
+            cobalt_result = download_via_cobalt(video_id, tmpdir)
+            if cobalt_result:
+                audio_path, _, _ = cobalt_result
+                # Cobalt doesn't return metadata; fetch via yt-dlp best-effort
+                title, artist = _fetch_metadata(url)
+                return _analyze_audio(audio_path, title=title, artist=artist)
+
+        # ── Strategy 2: Piped API ───────────────────────────────────────────
+        if video_id:
+            sys.stderr.write('[analyze_url] trying Piped...\n')
             piped_result = download_via_piped(video_id, tmpdir)
             if piped_result:
                 audio_path, title, artist = piped_result
                 return _analyze_audio(audio_path, title=title, artist=artist)
 
-        # ── Strategy 2: yt-dlp with android/ios clients ────────────────────
+        # ── Strategy 3: yt-dlp with multiple clients ────────────────────────
         try:
             import yt_dlp as _yt
-            yt_available = True
         except ImportError:
-            yt_available = False
-
-        if not yt_available:
-            return {"success": False, "error": "No se pudo obtener el audio. yt-dlp no instalado y Piped falló."}
+            return {"success": False, "error": "No se pudo obtener el audio (yt-dlp no instalado, Cobalt y Piped fallaron)."}
 
         cookies_file = find_cookies_file()
+        title, artist = _fetch_metadata(url, cookies_file)
 
-        # Fetch metadata separately (best-effort)
-        title, artist = '', ''
-        for client in (['android'], ['ios'], ['tv_embedded']):
-            try:
-                meta_opts = {
-                    'quiet': True, 'no_warnings': True, 'logger': _QuietLogger(),
-                    'extractor_args': {'youtube': {'player_client': client}},
-                }
-                if cookies_file:
-                    meta_opts['cookiefile'] = cookies_file
-                with _yt.YoutubeDL(meta_opts) as ydl:
-                    info = ydl.extract_info(url, download=False)
-                    title = info.get('title', '')
-                    artist = info.get('artist') or info.get('creator') or info.get('uploader', '')
-                break
-            except Exception:
-                continue
-
-        # Try download with each client in order until one succeeds
-        yt_strategies = [
-            ['android'],
-            ['ios'],
-            ['android_embedded'],
-            ['tv_embedded'],
-        ]
+        yt_strategies = [['android'], ['ios'], ['android_embedded'], ['tv_embedded']]
         audio_path = None
         for clients in yt_strategies:
+            sys.stderr.write(f'[analyze_url] trying yt-dlp {clients}...\n')
             subdir = tempfile.mkdtemp(dir=tmpdir)
             audio_path = _ytdlp_download(url, subdir, clients, cookies_file)
             if audio_path:
                 break
 
         if not audio_path:
-            return {"success": False, "error": "YouTube bloqueó la descarga. Intentá subir el archivo de audio manualmente."}
+            return {
+                "success": False,
+                "error": "No se pudo descargar el audio de YouTube. Todas las estrategias fallaron. Podés subir el MP3 manualmente con el botón 'Subir archivo'."
+            }
 
         return _analyze_audio(audio_path, title=title, artist=artist)
+
+
+def _fetch_metadata(url, cookies_file=None):
+    """Try to fetch title/artist via yt-dlp without downloading. Returns (title, artist)."""
+    try:
+        import yt_dlp as _yt
+    except ImportError:
+        return '', ''
+    for client in (['android'], ['ios'], ['tv_embedded']):
+        try:
+            opts = {
+                'quiet': True, 'no_warnings': True, 'logger': _QuietLogger(),
+                'extractor_args': {'youtube': {'player_client': client}},
+            }
+            if cookies_file:
+                opts['cookiefile'] = cookies_file
+            with _yt.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                title = info.get('title', '')
+                artist = info.get('artist') or info.get('creator') or info.get('uploader', '')
+                return title, artist
+        except Exception:
+            continue
+    return '', ''
 
 
 if __name__ == '__main__':
