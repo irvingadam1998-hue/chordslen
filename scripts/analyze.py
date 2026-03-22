@@ -69,14 +69,37 @@ class _QuietLogger:
     def error(self, msg): sys.stderr.write(msg + '\n')
 
 def find_cookies_file():
-    """Look for cookies.txt in /app (Docker) or next to this script."""
+    """
+    Locate a YouTube cookies file.
+    Priority:
+      1. YOUTUBE_COOKIES_B64 env var (base64-encoded cookies.txt content)
+      2. /app/cookies.txt  (Docker volume mount)
+      3. cookies.txt next to this script
+    """
+    import base64 as _b64
+
+    b64 = os.environ.get('YOUTUBE_COOKIES_B64', '').strip()
+    if b64:
+        try:
+            content = _b64.b64decode(b64).decode('utf-8')
+            tmp = '/tmp/yt_cookies.txt'
+            with open(tmp, 'w') as f:
+                f.write(content)
+            sys.stderr.write(f'[cookies] loaded from YOUTUBE_COOKIES_B64 ({len(content)} chars)\n')
+            return tmp
+        except Exception as e:
+            sys.stderr.write(f'[cookies] YOUTUBE_COOKIES_B64 decode failed: {e}\n')
+
     candidates = [
         '/app/cookies.txt',
         os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'cookies.txt'),
     ]
     for path in candidates:
         if os.path.isfile(path):
+            sys.stderr.write(f'[cookies] found file: {path}\n')
             return os.path.abspath(path)
+
+    sys.stderr.write('[cookies] no cookies found — set YOUTUBE_COOKIES_B64 in Railway\n')
     return None
 
 def extract_video_id(url):
@@ -397,7 +420,13 @@ def analyze_url(url):
         cookies_file = find_cookies_file()
         title, artist = _fetch_metadata(url, cookies_file)
 
-        yt_strategies = [['android'], ['ios'], ['android_embedded'], ['tv_embedded']]
+        # With cookies, the standard web client works best.
+        # Without cookies, try mobile clients that bypass bot detection.
+        if cookies_file:
+            yt_strategies = [['web'], ['android'], ['ios'], ['tv_embedded']]
+        else:
+            yt_strategies = [['android'], ['ios'], ['android_embedded'], ['tv_embedded']]
+
         audio_path = None
         for clients in yt_strategies:
             sys.stderr.write(f'[analyze_url] trying yt-dlp {clients}...\n')
@@ -407,10 +436,30 @@ def analyze_url(url):
                 break
 
         if not audio_path:
-            return {
-                "success": False,
-                "error": "No se pudo descargar el audio de YouTube. Todas las estrategias fallaron. Podés subir el MP3 manualmente con el botón 'Subir archivo'."
-            }
+            has_cookies = cookies_file is not None
+            if has_cookies:
+                msg = (
+                    "YouTube bloqueó la descarga incluso con cookies. "
+                    "Las cookies pueden haber expirado — exportá unas nuevas y actualizá YOUTUBE_COOKIES_B64 en Railway."
+                )
+            else:
+                msg = (
+                    "YouTube bloquea las descargas desde servidores (detección de bots). "
+                    "Solución: exportá tus cookies de YouTube y agregá la variable YOUTUBE_COOKIES_B64 en Railway. "
+                    "Instrucciones en los logs del servidor."
+                )
+            sys.stderr.write('[analyze_url] ALL strategies failed\n')
+            sys.stderr.write('=' * 60 + '\n')
+            sys.stderr.write('SOLUCIÓN: Configurar cookies de YouTube en Railway\n')
+            sys.stderr.write('1. Instalar extensión: "Get cookies.txt LOCALLY" (Chrome/Firefox)\n')
+            sys.stderr.write('2. Ir a youtube.com con sesión iniciada\n')
+            sys.stderr.write('3. Exportar cookies.txt con la extensión\n')
+            sys.stderr.write('4. Codificar en base64:\n')
+            sys.stderr.write('   Linux/Mac: base64 -w 0 cookies.txt\n')
+            sys.stderr.write('   Windows PowerShell: [Convert]::ToBase64String([IO.File]::ReadAllBytes("cookies.txt"))\n')
+            sys.stderr.write('5. En Railway > Variables: YOUTUBE_COOKIES_B64 = <resultado del paso 4>\n')
+            sys.stderr.write('=' * 60 + '\n')
+            return {"success": False, "error": msg}
 
         return _analyze_audio(audio_path, title=title, artist=artist)
 
