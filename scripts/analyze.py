@@ -273,16 +273,23 @@ def download_via_invidious(video_id, tmpdir):
     import urllib.request
     import json as _j
 
-    # Public instances known to have API + proxy enabled
-    INSTANCES = [
-        'https://inv.nadeko.net',
-        'https://invidious.privacyredirect.com',
-        'https://yt.cdaut.de',
-        'https://invidious.nerdvpn.de',
-        'https://invidious.io',
-        'https://vid.puffyan.us',
-        'https://invidious.lunar.icu',
-    ]
+    # Updated list — ordered by reliability. Add env override via INVIDIOUS_INSTANCES.
+    env_instances = os.environ.get('INVIDIOUS_INSTANCES', '').strip()
+    if env_instances:
+        INSTANCES = [i.strip() for i in env_instances.split(',') if i.strip()]
+    else:
+        INSTANCES = [
+            'https://inv.nadeko.net',
+            'https://invidious.nerdvpn.de',
+            'https://yewtu.be',
+            'https://iv.datura.network',
+            'https://invidious.perennialte.ch',
+            'https://invidious.privacyredirect.com',
+            'https://invidious.fdn.fr',
+            'https://yt.cdaut.de',
+            'https://inv.tux.pizza',
+            'https://invidious.incogniweb.net',
+        ]
 
     for instance in INSTANCES:
         # Step 1: get adaptive formats list
@@ -333,53 +340,101 @@ def download_via_invidious(video_id, tmpdir):
 
 def download_via_cobalt(video_id, tmpdir):
     """
-    Download audio via Cobalt.tools — open-source media downloader that handles
-    YouTube bot detection on their end. Returns (audio_path, None, None) or None.
+    Download audio via Cobalt — tries multiple public instances and both
+    API formats (v1 and v2) to maximise success rate.
     """
     import urllib.request
     import json as _json
 
-    url = f'https://www.youtube.com/watch?v={video_id}'
-    body = _json.dumps({'url': url, 'downloadMode': 'audio'}).encode()
-    req = urllib.request.Request(
-        'https://api.cobalt.tools/',
-        data=body,
-        headers={
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'User-Agent': 'Mozilla/5.0 (compatible; ChordLens/1.0)',
-        },
-    )
+    yt_url = f'https://www.youtube.com/watch?v={video_id}'
+
+    # Public Cobalt-compatible instances. Add more via COBALT_INSTANCES env var.
+    env_cobalt = os.environ.get('COBALT_INSTANCES', '').strip()
+    if env_cobalt:
+        APIS = [i.strip().rstrip('/') + '/' for i in env_cobalt.split(',') if i.strip()]
+    else:
+        APIS = [
+            'https://api.cobalt.tools/',
+            'https://co.wuk.sh/',
+            'https://cobalt.api.timelessnesses.me/',
+        ]
+
+    # Try both body formats — v2 (current) and v1 (legacy)
+    BODIES = [
+        _json.dumps({'url': yt_url, 'downloadMode': 'audio', 'audioFormat': 'mp3'}).encode(),
+        _json.dumps({'url': yt_url, 'isAudioOnly': True, 'aFormat': 'mp3'}).encode(),
+        _json.dumps({'url': yt_url, 'downloadMode': 'audio'}).encode(),
+    ]
+
+    HEADERS = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'User-Agent': (
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+            'AppleWebKit/537.36 (KHTML, like Gecko) '
+            'Chrome/124.0.0.0 Safari/537.36'
+        ),
+    }
+
+    for api_url in APIS:
+        for body in BODIES:
+            try:
+                req = urllib.request.Request(api_url, data=body, headers=HEADERS)
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    result = _json.loads(resp.read())
+            except Exception as e:
+                sys.stderr.write(f'[cobalt] {api_url} request failed: {e}\n')
+                break   # same instance, skip remaining body variants
+
+            status = result.get('status', '')
+            sys.stderr.write(f'[cobalt] {api_url} status={status}\n')
+
+            if status not in ('tunnel', 'redirect', 'stream'):
+                continue   # try next body format
+
+            download_url = result.get('url')
+            if not download_url:
+                continue
+
+            audio_path = os.path.join(tmpdir, f'cobalt_{api_url.split(".")[1]}.mp3')
+            try:
+                size = _http_download(download_url, audio_path, headers={
+                    'User-Agent': HEADERS['User-Agent'],
+                })
+                sys.stderr.write(f'[cobalt] downloaded {size} bytes\n')
+                if size > 10000:
+                    return audio_path, '', ''
+                sys.stderr.write('[cobalt] file too small\n')
+            except Exception as e:
+                sys.stderr.write(f'[cobalt] download failed: {e}\n')
+
+    sys.stderr.write('[cobalt] all instances/formats failed\n')
+    return None
+
+
+def download_via_pytubefix(url, tmpdir):
+    """
+    Download audio via pytubefix — a maintained fork of pytube with its own
+    bot-detection bypass, independent of yt-dlp.
+    Install: pip install pytubefix
+    """
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            result = _json.loads(resp.read())
-    except Exception as e:
-        sys.stderr.write(f'[cobalt] API request failed: {e}\n')
+        from pytubefix import YouTube
+    except ImportError:
+        sys.stderr.write('[pytubefix] not installed — skipping\n')
         return None
 
-    status = result.get('status', '')
-    sys.stderr.write(f'[cobalt] status={status}\n')
-
-    if status not in ('tunnel', 'redirect', 'stream'):
-        err = result.get('error', {})
-        sys.stderr.write(f'[cobalt] error detail: {err}\n')
-        return None
-
-    download_url = result.get('url')
-    if not download_url:
-        sys.stderr.write('[cobalt] no download URL in response\n')
-        return None
-
-    audio_path = os.path.join(tmpdir, 'audio.mp3')
     try:
-        size = _http_download(download_url, audio_path)
-        sys.stderr.write(f'[cobalt] downloaded {size} bytes\n')
-        if size < 10000:
-            sys.stderr.write('[cobalt] file too small — likely failed\n')
+        yt = YouTube(url, use_oauth=False, allow_oauth_cache=False)
+        stream = yt.streams.filter(only_audio=True).order_by('abr').last()
+        if not stream:
+            sys.stderr.write('[pytubefix] no audio streams found\n')
             return None
-        return audio_path, '', ''
+        out_path = stream.download(output_path=tmpdir, filename='pytubefix_audio')
+        sys.stderr.write(f'[pytubefix] downloaded: {out_path}\n')
+        return out_path, yt.title or '', yt.author or ''
     except Exception as e:
-        sys.stderr.write(f'[cobalt] download failed: {e}\n')
+        sys.stderr.write(f'[pytubefix] failed: {e}\n')
         return None
 
 
@@ -700,13 +755,22 @@ def _ytdlp_download(url, tmpdir, player_clients, cookies_file=None):
             ffmpeg_path = winget_ffmpeg
             os.environ['PATH'] = os.path.dirname(ffmpeg_path) + os.pathsep + os.environ.get('PATH', '')
 
+    # PO token support — reduces bot detection on some clients
+    po_token = os.environ.get('YT_PO_TOKEN', '').strip()
+    extractor_args = {'youtube': {'player_client': player_clients}}
+    if po_token:
+        extractor_args['youtube']['po_token'] = [f'web+{po_token}']
+        sys.stderr.write('[yt-dlp] using PO token\n')
+
     base_opts = {
         'outtmpl': os.path.join(tmpdir, 'audio.%(ext)s'),
         'quiet': True,
         'no_warnings': True,
         'noprogress': True,
         'logger': _QuietLogger(),
-        'extractor_args': {'youtube': {'player_client': player_clients}},
+        'extractor_args': extractor_args,
+        'nocheckcertificate': True,
+        'socket_timeout': 30,
     }
     if cookies_file:
         base_opts['cookiefile'] = cookies_file
@@ -760,7 +824,14 @@ def analyze_url(url):
                 title, artist = _fetch_metadata(url)
                 return _analyze_audio(audio_path, title=title, artist=artist)
 
-        # ── Strategy 3: Piped API (proxied streams only) ────────────────────
+        # ── Strategy 3: pytubefix (independent bot-detection bypass) ────────
+        sys.stderr.write('[analyze_url] trying pytubefix...\n')
+        pytubefix_result = download_via_pytubefix(url, tmpdir)
+        if pytubefix_result:
+            audio_path, title, artist = pytubefix_result
+            return _analyze_audio(audio_path, title=title, artist=artist)
+
+        # ── Strategy 4: Piped API (proxied streams only) ────────────────────
         if video_id:
             sys.stderr.write('[analyze_url] trying Piped...\n')
             piped_result = download_via_piped(video_id, tmpdir)
@@ -768,7 +839,7 @@ def analyze_url(url):
                 audio_path, title, artist = piped_result
                 return _analyze_audio(audio_path, title=title, artist=artist)
 
-        # ── Strategy 4: yt-dlp with multiple clients ────────────────────────
+        # ── Strategy 5: yt-dlp with multiple clients ────────────────────────
         try:
             import yt_dlp as _yt
         except ImportError:
@@ -778,11 +849,17 @@ def analyze_url(url):
         title, artist = _fetch_metadata(url, cookies_file)
 
         # With cookies, the standard web client works best.
-        # Without cookies, try mobile clients that bypass bot detection.
+        # Without cookies, try mobile/embedded clients that bypass bot detection.
         if cookies_file:
-            yt_strategies = [['web'], ['android'], ['ios'], ['tv_embedded']]
+            yt_strategies = [
+                ['web'], ['android'], ['ios'], ['tv_embedded'],
+                ['web_creator'], ['mweb'],
+            ]
         else:
-            yt_strategies = [['android'], ['ios'], ['android_embedded'], ['tv_embedded']]
+            yt_strategies = [
+                ['android'], ['ios'], ['tv_embedded'],
+                ['android_embedded'], ['web_creator'], ['mweb'], ['android_vr'],
+            ]
 
         audio_path = None
         for clients in yt_strategies:
@@ -797,12 +874,12 @@ def analyze_url(url):
             if has_cookies:
                 msg = (
                     "YouTube bloqueó la descarga incluso con cookies. "
-                    "Las cookies pueden haber expirado — exportá unas nuevas y actualizá YOUTUBE_COOKIES_B64 en Railway."
+                    "Las cookies pueden haber expirado — exporta unas nuevas y actualiza YOUTUBE_COOKIES_B64 en Railway."
                 )
             else:
                 msg = (
                     "YouTube bloquea las descargas desde servidores (detección de bots). "
-                    "Solución: exportá tus cookies de YouTube y agregá la variable YOUTUBE_COOKIES_B64 en Railway. "
+                    "Solución: exporta tus cookies de YouTube y agrega la variable YOUTUBE_COOKIES_B64 en Railway. "
                     "Instrucciones en los logs del servidor."
                 )
             sys.stderr.write('[analyze_url] ALL strategies failed\n')
