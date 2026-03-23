@@ -289,6 +289,14 @@ def download_via_invidious(video_id, tmpdir):
             'https://yt.cdaut.de',
             'https://inv.tux.pizza',
             'https://invidious.incogniweb.net',
+            'https://invidious.kavin.rocks',
+            'https://vid.puffyan.us',
+            'https://invidious.slipfox.xyz',
+            'https://inv.riverside.rocks',
+            'https://invidious.namazso.eu',
+            'https://invidious.048596.xyz',
+            'https://invidious.lunar.icu',
+            'https://invidious.projectsegfau.lt',
         ]
 
     for instance in INSTANCES:
@@ -357,6 +365,8 @@ def download_via_cobalt(video_id, tmpdir):
             'https://api.cobalt.tools/',
             'https://co.wuk.sh/',
             'https://cobalt.api.timelessnesses.me/',
+            'https://cobalt.tools/',
+            'https://dl.cobalt.tools/',
         ]
 
     # Try both body formats — v2 (current) and v1 (legacy)
@@ -739,13 +749,7 @@ def analyze_file_path(path):
     return _analyze_audio(path, title=title, artist='')
 
 
-def _ytdlp_download(url, tmpdir, player_clients, cookies_file=None):
-    """Attempt yt-dlp download with the given player_clients list. Returns audio_path or None."""
-    try:
-        import yt_dlp
-    except ImportError:
-        return None
-
+def _get_ffmpeg_path():
     ffmpeg_path = shutil.which('ffmpeg')
     if not ffmpeg_path:
         winget_ffmpeg = os.path.expandvars(
@@ -754,6 +758,45 @@ def _ytdlp_download(url, tmpdir, player_clients, cookies_file=None):
         if os.path.isfile(winget_ffmpeg):
             ffmpeg_path = winget_ffmpeg
             os.environ['PATH'] = os.path.dirname(ffmpeg_path) + os.pathsep + os.environ.get('PATH', '')
+    return ffmpeg_path
+
+
+def _build_ydl_opts(tmpdir, ffmpeg_path, cookies_file=None, extra=None):
+    base = {
+        'outtmpl': os.path.join(tmpdir, 'audio.%(ext)s'),
+        'quiet': True,
+        'no_warnings': True,
+        'noprogress': True,
+        'logger': _QuietLogger(),
+        'nocheckcertificate': True,
+        'socket_timeout': 30,
+    }
+    if cookies_file:
+        base['cookiefile'] = cookies_file
+    if extra:
+        base.update(extra)
+    if ffmpeg_path:
+        base['format'] = 'bestaudio/best'
+        base['ffmpeg_location'] = os.path.dirname(ffmpeg_path)
+        base['postprocessors'] = [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'wav'}]
+    else:
+        base['format'] = 'bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio'
+    return base
+
+
+def _ytdlp_collect(tmpdir):
+    files = [f for f in os.listdir(tmpdir) if os.path.isfile(os.path.join(tmpdir, f))]
+    return os.path.join(tmpdir, files[0]) if files else None
+
+
+def _ytdlp_download(url, tmpdir, player_clients, cookies_file=None):
+    """Attempt yt-dlp download with the given player_clients list. Returns audio_path or None."""
+    try:
+        import yt_dlp
+    except ImportError:
+        return None
+
+    ffmpeg_path = _get_ffmpeg_path()
 
     # PO token support — reduces bot detection on some clients
     po_token = os.environ.get('YT_PO_TOKEN', '').strip()
@@ -762,31 +805,9 @@ def _ytdlp_download(url, tmpdir, player_clients, cookies_file=None):
         extractor_args['youtube']['po_token'] = [f'web+{po_token}']
         sys.stderr.write('[yt-dlp] using PO token\n')
 
-    base_opts = {
-        'outtmpl': os.path.join(tmpdir, 'audio.%(ext)s'),
-        'quiet': True,
-        'no_warnings': True,
-        'noprogress': True,
-        'logger': _QuietLogger(),
+    ydl_opts = _build_ydl_opts(tmpdir, ffmpeg_path, cookies_file, {
         'extractor_args': extractor_args,
-        'nocheckcertificate': True,
-        'socket_timeout': 30,
-    }
-    if cookies_file:
-        base_opts['cookiefile'] = cookies_file
-
-    if ffmpeg_path:
-        ydl_opts = {
-            **base_opts,
-            'format': 'bestaudio/best',
-            'ffmpeg_location': os.path.dirname(ffmpeg_path),
-            'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'wav'}],
-        }
-    else:
-        ydl_opts = {
-            **base_opts,
-            'format': 'bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio',
-        }
+    })
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -795,10 +816,45 @@ def _ytdlp_download(url, tmpdir, player_clients, cookies_file=None):
         sys.stderr.write(f'[yt-dlp] {player_clients} failed: {e}\n')
         return None
 
-    files = [f for f in os.listdir(tmpdir) if os.path.isfile(os.path.join(tmpdir, f))]
-    if files:
+    result = _ytdlp_collect(tmpdir)
+    if result:
         sys.stderr.write(f'[yt-dlp] {player_clients} succeeded\n')
-    return os.path.join(tmpdir, files[0]) if files else None
+    return result
+
+
+def _ytdlp_download_impersonate(url, tmpdir, cookies_file=None):
+    """
+    yt-dlp with browser TLS impersonation (requires curl_cffi: pip install curl_cffi).
+    Bypasses YouTube's TLS fingerprint bot detection — most effective on datacenter IPs.
+    """
+    try:
+        import yt_dlp
+        import curl_cffi  # noqa — just check it's available
+    except ImportError as e:
+        sys.stderr.write(f'[yt-dlp-impersonate] skipping — {e}\n')
+        return None
+
+    ffmpeg_path = _get_ffmpeg_path()
+
+    for browser in ('chrome', 'safari', 'firefox'):
+        subdir = os.path.join(tmpdir, f'imp_{browser}')
+        os.makedirs(subdir, exist_ok=True)
+        ydl_opts = _build_ydl_opts(subdir, ffmpeg_path, cookies_file, {
+            'impersonate': browser,
+        })
+        sys.stderr.write(f'[yt-dlp-impersonate] trying impersonate={browser}\n')
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+        except Exception as e:
+            sys.stderr.write(f'[yt-dlp-impersonate] {browser} failed: {e}\n')
+            continue
+        result = _ytdlp_collect(subdir)
+        if result:
+            sys.stderr.write(f'[yt-dlp-impersonate] {browser} succeeded\n')
+            return result
+
+    return None
 
 
 def analyze_url(url):
@@ -839,7 +895,7 @@ def analyze_url(url):
                 audio_path, title, artist = piped_result
                 return _analyze_audio(audio_path, title=title, artist=artist)
 
-        # ── Strategy 5: yt-dlp with multiple clients ────────────────────────
+        # ── Strategy 5: yt-dlp with TLS impersonation (curl_cffi) ───────────
         try:
             import yt_dlp as _yt
         except ImportError:
@@ -848,26 +904,31 @@ def analyze_url(url):
         cookies_file = find_cookies_file()
         title, artist = _fetch_metadata(url, cookies_file)
 
-        # With cookies, the standard web client works best.
-        # Without cookies, try mobile/embedded clients that bypass bot detection.
-        if cookies_file:
-            yt_strategies = [
-                ['web'], ['android'], ['ios'], ['tv_embedded'],
-                ['web_creator'], ['mweb'],
-            ]
-        else:
-            yt_strategies = [
-                ['android'], ['ios'], ['tv_embedded'],
-                ['android_embedded'], ['web_creator'], ['mweb'], ['android_vr'],
-            ]
+        sys.stderr.write('[analyze_url] trying yt-dlp impersonate...\n')
+        imp_subdir = tempfile.mkdtemp(dir=tmpdir)
+        audio_path = _ytdlp_download_impersonate(url, imp_subdir, cookies_file)
 
-        audio_path = None
-        for clients in yt_strategies:
-            sys.stderr.write(f'[analyze_url] trying yt-dlp {clients}...\n')
-            subdir = tempfile.mkdtemp(dir=tmpdir)
-            audio_path = _ytdlp_download(url, subdir, clients, cookies_file)
-            if audio_path:
-                break
+        # ── Strategy 6: yt-dlp with multiple player clients ─────────────────
+        if not audio_path:
+            # With cookies, the standard web client works best.
+            # Without cookies, try mobile/embedded clients that bypass bot detection.
+            if cookies_file:
+                yt_strategies = [
+                    ['web'], ['android'], ['ios'], ['tv_embedded'],
+                    ['web_creator'], ['mweb'],
+                ]
+            else:
+                yt_strategies = [
+                    ['android'], ['ios'], ['tv_embedded'],
+                    ['android_embedded'], ['web_creator'], ['mweb'], ['android_vr'],
+                ]
+
+            for clients in yt_strategies:
+                sys.stderr.write(f'[analyze_url] trying yt-dlp {clients}...\n')
+                subdir = tempfile.mkdtemp(dir=tmpdir)
+                audio_path = _ytdlp_download(url, subdir, clients, cookies_file)
+                if audio_path:
+                    break
 
         if not audio_path:
             has_cookies = cookies_file is not None

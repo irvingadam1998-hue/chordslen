@@ -1,0 +1,6 @@
+yt-dlp
+librosa
+numpy
+soundfile
+pytubefix
+curl_cffi
