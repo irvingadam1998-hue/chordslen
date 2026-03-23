@@ -7,16 +7,31 @@ import shutil
 
 NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 
-CHORD_PATTERNS = {
-    'maj':  [1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0],
-    'min':  [1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0],
-    '7':    [1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0],
-    'm7':   [1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0],
-    'maj7': [1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1],
-    'dim':  [1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0],
-    'aug':  [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0],
-    'sus4': [1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0],
+# Weighted templates: root > fifth > third (more musical than binary)
+CHORD_INTERVALS = {
+    'maj':  {0: 1.0, 4: 0.6, 7: 0.8},
+    'min':  {0: 1.0, 3: 0.6, 7: 0.8},
+    '7':    {0: 1.0, 4: 0.6, 7: 0.8, 10: 0.5},
+    'm7':   {0: 1.0, 3: 0.6, 7: 0.8, 10: 0.5},
+    'maj7': {0: 1.0, 4: 0.6, 7: 0.8, 11: 0.5},
+    'dim':  {0: 1.0, 3: 0.6,  6: 0.5},
+    'aug':  {0: 1.0, 4: 0.6,  8: 0.5},
+    'sus4': {0: 1.0, 5: 0.7,  7: 0.8},
 }
+
+# Penalty multipliers: dim/aug penalized unless evidence is strong
+CHORD_TYPE_PENALTY = {
+    'maj': 1.0, 'min': 1.0, 'm7': 0.92, '7': 0.92,
+    'maj7': 0.88, 'sus4': 0.82, 'dim': 0.65, 'aug': 0.65,
+}
+
+# Krumhansl-Schmuckler key profiles for key detection
+KS_MAJOR = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
+KS_MINOR = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17]
+
+# (root_offset, quality) pairs for diatonic chords
+MAJOR_DIATONIC = [(0,'maj'),(2,'min'),(4,'min'),(5,'maj'),(7,'maj'),(9,'min'),(11,'dim')]
+MINOR_DIATONIC = [(0,'min'),(2,'dim'),(3,'maj'),(5,'min'),(7,'min'),(8,'maj'),(10,'maj')]
 
 def format_time(seconds):
     minutes = int(seconds) // 60
@@ -27,30 +42,147 @@ def make_chord_templates():
     import numpy as np
     templates = {}
     for root in range(12):
-        for quality, pattern in CHORD_PATTERNS.items():
-            rotated = pattern[12 - root:] + pattern[:12 - root]
+        for quality, intervals in CHORD_INTERVALS.items():
+            vec = np.zeros(12)
+            for interval, weight in intervals.items():
+                vec[(root + interval) % 12] = weight
             root_name = NOTE_NAMES[root]
             suffix = '' if quality == 'maj' else quality
             chord_name = f"{root_name}{suffix}"
-            templates[chord_name] = np.array(rotated, dtype=float)
+            templates[chord_name] = vec
     return templates
 
-def detect_chord_from_chroma(chroma_vec, templates):
+
+def _chord_quality(chord_name):
+    import re
+    m = re.match(r'^[A-G][#b]?(.*)$', chord_name)
+    quality = m.group(1) if m else ''
+    return quality if quality else 'maj'
+
+
+def detect_chord_from_chroma(chroma_vec, templates, diatonic_set=None,
+                             prev_chord=None, dominant_chord=None):
+    """
+    Score all templates and return (best_chord, best_score, second_chord).
+    Applies: rarity penalty, diatonic boost, dominant boost, continuity boost.
+    """
     import numpy as np
     norm = np.linalg.norm(chroma_vec)
     if norm < 0.01:
-        return None
+        return None, 0.0, None
     chroma_n = chroma_vec / norm
-    best_chord, best_score = None, -1
+    scored = []
     for chord_name, template in templates.items():
         t_norm = np.linalg.norm(template)
         if t_norm == 0:
             continue
         score = float(np.dot(chroma_n, template / t_norm))
-        if score > best_score:
-            best_score = score
-            best_chord = chord_name
-    return best_chord if best_score > 0.5 else None
+        # Penalize rare chord types
+        score *= CHORD_TYPE_PENALTY.get(_chord_quality(chord_name), 1.0)
+        # Dominant chord boost — harmonic minor raises the V to major
+        if dominant_chord and chord_name == dominant_chord:
+            score *= 1.35
+        # Boost diatonic chords
+        if diatonic_set and chord_name in diatonic_set:
+            score *= 1.15
+        # Continuity: slight boost for staying on the same chord
+        if prev_chord and chord_name == prev_chord:
+            score *= 1.05
+        scored.append((score, chord_name))
+
+    scored.sort(reverse=True)
+    best_score  = scored[0][0] if scored else 0.0
+    best_chord  = scored[0][1] if best_score > 0.45 else None
+    second_chord = scored[1][1] if len(scored) > 1 else None
+    return best_chord, best_score, second_chord
+
+
+def detect_key(global_chroma):
+    """Krumhansl-Schmuckler key estimation. Returns (root: int, mode: str)."""
+    import numpy as np
+    best_key, best_score, best_mode = 0, -np.inf, 'major'
+    for root in range(12):
+        for mode, profile in [('major', KS_MAJOR), ('minor', KS_MINOR)]:
+            rotated = profile[12 - root:] + profile[:12 - root]
+            score = float(np.corrcoef(global_chroma, rotated)[0, 1])
+            if score > best_score:
+                best_score, best_key, best_mode = score, root, mode
+    return best_key, best_mode
+
+
+def get_diatonic_chords(key_root, key_mode):
+    """Return the set of diatonic chord names for the given key."""
+    pattern = MAJOR_DIATONIC if key_mode == 'major' else MINOR_DIATONIC
+    diatonic = set()
+    for offset, quality in pattern:
+        root = (key_root + offset) % 12
+        suffix = '' if quality == 'maj' else quality
+        diatonic.add(f"{NOTE_NAMES[root]}{suffix}")
+    return diatonic
+
+
+def get_dominant_chord(key_root, key_mode):
+    """
+    Return the dominant (V) chord name.
+    In minor keys harmonic minor raises the 7th, making V a MAJOR chord (e.g. E in Am).
+    In major keys V is also major.
+    """
+    dominant_root = (key_root + 7) % 12
+    return NOTE_NAMES[dominant_root]   # always major
+
+
+def apply_harmonic_corrections(timeline, key_root, key_mode):
+    """
+    Post-processing pass to recover the dominant chord.
+
+    Rules applied (minor keys only):
+    1. Em detected immediately before the tonic → convert to E (V→I cadence).
+    2. Em detected after a pre-dominant chord (IV, IVm, IIm) → convert to E.
+    3. Em sandwiched between any two chords where E fits better → convert to E
+       when second-best candidate was E.
+    Also re-deduplicates and re-numbers measures after corrections.
+    """
+    if key_mode != 'minor' or not timeline:
+        return timeline
+
+    tonic     = NOTE_NAMES[key_root]
+    dominant  = NOTE_NAMES[(key_root + 7) % 12]          # e.g. 'E' in Am
+    dom_minor = dominant + 'm'                            # e.g. 'Em'
+
+    pre_dominants = {
+        NOTE_NAMES[(key_root + 5) % 12],        # IV  (F in Am)
+        NOTE_NAMES[(key_root + 5) % 12] + 'm',  # IVm
+        NOTE_NAMES[(key_root + 2) % 12] + 'm',  # IIm (Dm in Am)
+        NOTE_NAMES[(key_root + 2) % 12],         # II
+    }
+
+    chords    = [e['chord'] for e in timeline]
+    corrected = list(chords)
+
+    for i, chord in enumerate(chords):
+        if chord != dom_minor:
+            continue
+        prev_c = chords[i - 1] if i > 0 else None
+        next_c = chords[i + 1] if i + 1 < len(chords) else None
+
+        # Rule 1: Xm → tonic cadence
+        if next_c == tonic:
+            corrected[i] = dominant
+        # Rule 2: pre-dominant → Xm
+        elif prev_c in pre_dominants:
+            corrected[i] = dominant
+
+    # Rebuild, re-deduplicate, re-number
+    result, last = [], None
+    for entry, new_chord in zip(timeline, corrected):
+        if new_chord != last:
+            new_entry = dict(entry, chord=new_chord)
+            result.append(new_entry)
+            last = new_chord
+    for i, entry in enumerate(result, start=1):
+        entry['measure'] = i
+    return result
+
 
 def simplify_chord(chord):
     """Strip extensions (maj7, m7, 7, etc.) keeping only root + major/minor/dim/aug."""
@@ -331,7 +463,6 @@ def _analyze_audio(audio_path, title='', artist=''):
         import numpy as np
     except ImportError:
         return {"success": False, "error": "numpy no instalado. Ejecuta: pip install numpy"}
-
     try:
         import librosa
     except ImportError:
@@ -339,50 +470,156 @@ def _analyze_audio(audio_path, title='', artist=''):
 
     templates = make_chord_templates()
 
-    # Use lower sample rate for speed; cap at 6 minutes to avoid timeout
     MAX_DURATION = 360
     try:
-        y, sr = librosa.load(audio_path, sr=11025, mono=True, duration=MAX_DURATION)
+        y, sr = librosa.load(audio_path, sr=22050, mono=True, duration=MAX_DURATION)
     except Exception as e:
         return {"success": False, "error": f"Error al cargar el audio: {str(e)}"}
 
-    # Larger hop for speed; 2-second windows
-    hop_length = 1024
-    chroma = librosa.feature.chroma_cqt(y=y, sr=sr, hop_length=hop_length)
+    # 1. Harmonic/percussive separation — removes drums and noise before analysis
+    y_harmonic, _ = librosa.effects.hpss(y)
 
-    window_size = 2.0
-    frames_per_window = max(1, int(window_size * sr / hop_length))
+    # 2. Chroma CQT on harmonic component only
+    hop_length = 512
+    chroma = librosa.feature.chroma_cqt(y=y_harmonic, sr=sr, hop_length=hop_length)
     n_frames = chroma.shape[1]
 
-    raw = []
-    frame_idx = 0
-    t = 0.0
-    while frame_idx < n_frames:
-        end_idx = min(frame_idx + frames_per_window, n_frames)
-        window_chroma = chroma[:, frame_idx:end_idx].mean(axis=1)
-        chord = detect_chord_from_chroma(window_chroma, templates)
-        if chord:
-            chord = simplify_chord(chord)
-        raw.append((t, chord))
-        frame_idx += frames_per_window
-        t += window_size
+    # 3. Key detection from global chroma (Krumhansl-Schmuckler)
+    global_chroma = chroma.mean(axis=1)
+    key_root, key_mode = detect_key(global_chroma)
+    diatonic_set   = get_diatonic_chords(key_root, key_mode)
+    dominant_chord = get_dominant_chord(key_root, key_mode)
+    # Include dominant in diatonic set (harmonic minor: V is major, not in natural minor)
+    diatonic_set.add(dominant_chord)
+    sys.stderr.write(
+        f'[analyze] key={NOTE_NAMES[key_root]} {key_mode}, '
+        f'dominant={dominant_chord}, diatonic={sorted(diatonic_set)}\n'
+    )
 
-    # Deduplicate consecutive same chords
-    final = []
+    # 4. Onset-based segmentation — higher delta + longer wait reduce over-detection
+    onset_frames = librosa.onset.onset_detect(
+        y=y_harmonic, sr=sr, hop_length=hop_length,
+        delta=0.15, pre_max=5, post_max=5, pre_avg=10, post_avg=10, wait=22,
+    )
+    onset_times = librosa.frames_to_time(onset_frames, sr=sr, hop_length=hop_length)
+
+    segment_starts = list(onset_frames)
+    segment_ends   = list(onset_frames[1:]) + [n_frames]
+    if not segment_starts:
+        segment_starts, segment_ends, onset_times = [0], [n_frames], [0.0]
+
+    # 5. Per-segment chord detection
+    MIN_SEGMENT_DURATION = 0.5   # anything shorter is noise
+    CONFIDENCE_THRESHOLD = 0.50  # raised — require stronger evidence to change chord
+
+    raw_chords = []
+    raw_times  = []
+
+    # Debounce state: a chord must be confirmed in DEBOUNCE_COUNT consecutive
+    # segments before the output actually changes.
+    DEBOUNCE_COUNT = 2
+    current_chord  = None
+    cand_chord     = None
+    cand_count     = 0
+
+    for start_f, end_f, t in zip(segment_starts, segment_ends, onset_times):
+        seg_duration = (end_f - start_f) * hop_length / sr
+        if seg_duration < MIN_SEGMENT_DURATION:
+            raw_chords.append(current_chord)
+            raw_times.append(float(t))
+            continue
+
+        seg_chroma = chroma[:, start_f:end_f]
+        chroma_vec = np.median(seg_chroma, axis=1)
+
+        chord, score, second_chord = detect_chord_from_chroma(
+            chroma_vec, templates, diatonic_set, current_chord, dominant_chord
+        )
+
+        if score < CONFIDENCE_THRESHOLD:
+            # Low confidence: try second-best if it's the dominant
+            if second_chord and second_chord == dominant_chord:
+                chord = dominant_chord
+            else:
+                chord = current_chord
+        elif chord:
+            chord = simplify_chord(chord)
+            # Hard-restrict out-of-key chords: require very high confidence
+            if chord not in diatonic_set and score < 0.65:
+                # Second-best rescue: use it if it's diatonic
+                if second_chord and second_chord in diatonic_set:
+                    chord = simplify_chord(second_chord)
+                else:
+                    chord = current_chord
+
+        # Debounce: only commit to a new chord after DEBOUNCE_COUNT confirmations
+        if chord == current_chord:
+            cand_chord, cand_count = None, 0
+        elif chord == cand_chord:
+            cand_count += 1
+            if cand_count >= DEBOUNCE_COUNT:
+                current_chord = chord
+                cand_chord, cand_count = None, 0
+        else:
+            cand_chord, cand_count = chord, 1
+
+        raw_chords.append(current_chord)
+        raw_times.append(float(t))
+
+    # 6. Deduplicate consecutive identical chords
+    deduped = []
     last_chord = None
-    for time, chord in raw:
+    for time, chord in zip(raw_times, raw_chords):
         if chord and chord != last_chord:
-            final.append((time, chord))
+            deduped.append((time, chord))
             last_chord = chord
 
-    chords_timeline = []
-    for measure, (time, chord) in enumerate(final, start=1):
-        chords_timeline.append({
+    # 7. Merge short interruptions: X → Y(< 0.5s) → X  →  X
+    #    e.g. Am → Dm(0.2s) → Am  becomes  Am
+    def _durations(seq):
+        result = []
+        for i in range(len(seq)):
+            if i + 1 < len(seq):
+                result.append(seq[i + 1][0] - seq[i][0])
+            else:
+                result.append(float('inf'))
+        return result
+
+    MERGE_THRESHOLD = 0.5   # seconds
+    changed = True
+    while changed:
+        changed = False
+        durs = _durations(deduped)
+        merged = []
+        i = 0
+        while i < len(deduped):
+            t_i, c_i = deduped[i]
+            if (durs[i] < MERGE_THRESHOLD
+                    and merged
+                    and i + 1 < len(deduped)
+                    and merged[-1][1] == deduped[i + 1][1]):
+                # Short interruption between two identical chords — skip it
+                changed = True
+                i += 1
+                continue
+            merged.append((t_i, c_i))
+            i += 1
+        deduped = merged
+
+    final = deduped
+
+    chords_timeline = [
+        {
             'time': round(time, 2),
             'time_str': format_time(time),
             'chord': chord,
-            'measure': measure
-        })
+            'measure': measure,
+        }
+        for measure, (time, chord) in enumerate(final, start=1)
+    ]
+
+    # 8. Harmonic corrections: recover dominant chord (e.g. Em → E before Am)
+    chords_timeline = apply_harmonic_corrections(chords_timeline, key_root, key_mode)
 
     return {
         "success": True,
@@ -390,7 +627,53 @@ def _analyze_audio(audio_path, title='', artist=''):
         "chords_timeline": chords_timeline,
         "title": title,
         "artist": artist,
+        "key": f"{NOTE_NAMES[key_root]} {key_mode}",
     }
+
+
+def validate_result(result, expected_str):
+    """
+    Compare detected chords against a known-correct progression.
+    expected_str: comma-separated chord names, e.g. "Am,Dm,G,F,E"
+    Prints a validation report to stderr and adds a 'validation' key to result.
+    """
+    if not result.get('success'):
+        return result
+
+    expected = [c.strip() for c in expected_str.split(',') if c.strip()]
+    detected = [e['chord'] for e in result.get('chords_timeline', [])]
+    detected_unique = []
+    for c in detected:
+        if not detected_unique or c != detected_unique[-1]:
+            detected_unique.append(c)
+
+    # How many expected chords appear anywhere in the detected sequence
+    detected_set = set(detected_unique)
+    found     = [c for c in expected if c in detected_set]
+    missing   = [c for c in expected if c not in detected_set]
+    extra     = [c for c in detected_unique if c not in set(expected)]
+    precision = len(found) / len(expected) * 100 if expected else 0.0
+
+    sep = '=' * 60
+    sys.stderr.write(f'\n{sep}\n')
+    sys.stderr.write('VALIDATION REPORT\n')
+    sys.stderr.write(f'{sep}\n')
+    sys.stderr.write(f'Expected : {" → ".join(expected)}\n')
+    sys.stderr.write(f'Detected : {" → ".join(detected_unique)}\n')
+    sys.stderr.write(f'Found    : {found}  ({precision:.0f}% of expected)\n')
+    sys.stderr.write(f'Missing  : {missing}\n')
+    sys.stderr.write(f'Extra    : {extra}\n')
+    sys.stderr.write(f'{sep}\n\n')
+
+    result['validation'] = {
+        'expected': expected,
+        'detected_unique': detected_unique,
+        'found': found,
+        'missing': missing,
+        'extra': extra,
+        'coverage_pct': round(precision, 1),
+    }
+    return result
 
 
 def analyze_file_path(path):
@@ -563,17 +846,36 @@ def _fetch_metadata(url, cookies_file=None):
 
 
 if __name__ == '__main__':
-    if len(sys.argv) < 2:
-        print(json.dumps({"success": False, "error": "Uso: analyze.py <url> | analyze.py --file <ruta>"}))
+    args = sys.argv[1:]
+
+    if not args:
+        print(json.dumps({"success": False, "error": (
+            "Uso: analyze.py <url> "
+            "| analyze.py --file <ruta> "
+            "[--validate \"Am,Dm,G,F,E\"]"
+        )}))
         sys.exit(1)
 
-    if sys.argv[1] == '--file':
-        if len(sys.argv) < 3:
+    # Extract optional --validate flag
+    expected_progression = None
+    if '--validate' in args:
+        idx = args.index('--validate')
+        if idx + 1 < len(args):
+            expected_progression = args[idx + 1]
+            args = args[:idx] + args[idx + 2:]
+        else:
+            sys.stderr.write('[validate] --validate requires a chord list, e.g. "Am,Dm,G,F,E"\n')
+
+    if args[0] == '--file':
+        if len(args) < 2:
             print(json.dumps({"success": False, "error": "Ruta de archivo no proporcionada"}))
             sys.exit(1)
-        result = analyze_file_path(sys.argv[2])
+        result = analyze_file_path(args[1])
     else:
-        result = analyze_url(sys.argv[1])
+        result = analyze_url(args[0])
+
+    if expected_progression:
+        result = validate_result(result, expected_progression)
 
     sys.stdout.buffer.write(json.dumps(result, ensure_ascii=True).encode('ascii'))
     sys.stdout.buffer.write(b'\n')

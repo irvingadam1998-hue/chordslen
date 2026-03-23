@@ -345,6 +345,7 @@ export default function Home() {
                     chords={result.chords_timeline}
                     currentTime={currentTime}
                     transposeBy={transposeBy}
+                    totalDuration={totalDuration}
                     onSeek={(t) => seekRef.current?.(t)}
                   />
                 </div>
