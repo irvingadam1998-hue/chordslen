@@ -41,7 +41,7 @@ interface Block {
 }
 
 export default function ChordTimeline({ chords, currentTime = -1, transposeBy = 0, onSeek, totalDuration }: Props) {
-  const activeRef = useRef<HTMLDivElement>(null)
+  const activeRef = useRef<HTMLButtonElement>(null)
 
   // Estimate total duration
   const total = totalDuration ?? (
