@@ -135,7 +135,7 @@ export default function Home() {
         {!result && (
           <>
             {/* Hero */}
-            <section className="min-h-[90vh] flex flex-col items-center justify-center px-6 text-center">
+            <section className="min-h-[90vh] flex flex-col items-center justify-center px-4 sm:px-6 text-center">
               <div className="max-w-3xl mx-auto flex flex-col items-center gap-8">
                 <div className="inline-flex items-center gap-2 bg-yellow-400/10 border border-yellow-400/20 rounded-full px-4 py-1.5 text-yellow-400 text-xs font-medium tracking-wider">
                   <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse" />
@@ -208,7 +208,7 @@ export default function Home() {
             </section>
 
             {/* Cómo funciona */}
-            <section id="como-funciona" className="border-t border-white/5 py-24 px-6">
+            <section id="como-funciona" className="border-t border-white/5 py-14 sm:py-24 px-4 sm:px-6">
               <div className="max-w-5xl mx-auto">
                 <div className="text-center mb-16">
                   <p className="text-yellow-400 text-xs font-mono tracking-widest mb-3">PROCESO</p>
@@ -236,9 +236,9 @@ export default function Home() {
             </section>
 
             {/* Features */}
-            <section className="border-t border-white/5 py-24 px-6">
+            <section className="border-t border-white/5 py-14 sm:py-24 px-4 sm:px-6">
               <div className="max-w-5xl mx-auto">
-                <div className="text-center mb-16">
+                <div className="text-center mb-10 sm:mb-16">
                   <p className="text-yellow-400 text-xs font-mono tracking-widest mb-3">FUNCIONALIDADES</p>
                   <h2 className="text-3xl font-bold">Todo lo que necesitas</h2>
                 </div>
@@ -264,7 +264,7 @@ export default function Home() {
             </section>
 
             {/* CTA bottom */}
-            <section className="border-t border-white/5 py-24 px-6 text-center">
+            <section className="border-t border-white/5 py-14 sm:py-24 px-4 sm:px-6 text-center">
               <div className="max-w-xl mx-auto flex flex-col items-center gap-6">
                 <h2 className="text-3xl font-bold">¿Listo para empezar?</h2>
                 <p className="text-white/40 text-sm">Pega cualquier link de YouTube y descubre los acordes en segundos.</p>
@@ -278,14 +278,14 @@ export default function Home() {
             RESULTADOS
         ════════════════════════════════════ */}
         {result && result.chords_timeline.length > 0 && (
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 py-10 flex flex-col gap-14">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 sm:py-10 flex flex-col gap-8 sm:gap-12">
 
             {/* Song header */}
-            <div className="flex items-start gap-4 justify-between">
-              <div>
+            <div className="flex items-start gap-4 justify-between flex-wrap">
+              <div className="min-w-0">
                 <p className="text-white/30 text-xs font-mono tracking-widest uppercase mb-1">Resultado del análisis</p>
-                {result.title && <h1 className="text-2xl sm:text-3xl font-bold text-white leading-tight">{result.title}</h1>}
-                {result.artist && <p className="text-white/40 text-base mt-1">{result.artist}</p>}
+                {result.title && <h1 className="text-xl sm:text-3xl font-bold text-white leading-tight truncate">{result.title}</h1>}
+                {result.artist && <p className="text-white/40 text-sm sm:text-base mt-1">{result.artist}</p>}
               </div>
             </div>
 
@@ -338,9 +338,9 @@ export default function Home() {
             {/* 03 — Transposición y acordes */}
             <section className="flex flex-col gap-0">
               <SectionLabel number="03" title="Transposición y acordes" />
-              <div className="grid lg:grid-cols-[300px_1fr] gap-6 items-start">
+              <div className="grid md:grid-cols-[240px_1fr] lg:grid-cols-[300px_1fr] gap-4 sm:gap-6 items-start">
                 <TransposePanel capo={capo} shift={shift} onCapoChange={setCapo} onShiftChange={setShift} />
-                <div className="bg-white/3 border border-white/8 rounded-2xl p-6">
+                <div className="bg-white/3 border border-white/8 rounded-2xl p-3 sm:p-6">
                   <ChordTimeline
                     chords={result.chords_timeline}
                     currentTime={currentTime}

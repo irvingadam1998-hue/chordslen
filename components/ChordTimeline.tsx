@@ -119,12 +119,12 @@ export default function ChordTimeline({ chords, currentTime = -1, transposeBy = 
         return (
           <div key={rowIdx} className="flex items-stretch gap-2">
             {/* Row time label */}
-            <div className="w-10 shrink-0 flex items-center justify-end">
+            <div className="w-8 sm:w-10 shrink-0 flex items-center justify-end">
               <span className="text-[10px] font-mono text-white/20">{rowLabel}</span>
             </div>
 
             {/* Chord blocks */}
-            <div className="relative flex-1 h-14 rounded-lg overflow-hidden bg-white/3">
+            <div className="relative flex-1 h-10 sm:h-14 rounded-lg overflow-hidden bg-white/3">
               {rowBlocks.map((b, j) => {
                 const blockIdx = blocks.indexOf(b)
                 const isActive = blockIdx === activeBlockIdx
@@ -172,7 +172,7 @@ export default function ChordTimeline({ chords, currentTime = -1, transposeBy = 
                     />
                     {/* Chord name */}
                     <span
-                      className={`relative z-10 font-mono font-bold text-sm leading-none truncate px-1.5 transition-all ${
+                      className={`relative z-10 font-mono font-bold text-[10px] sm:text-sm leading-none truncate px-1 sm:px-1.5 transition-all ${
                         isActive ? 'text-white scale-110' : 'text-white/70 group-hover:text-white'
                       }`}
                       style={isActive ? { textShadow: `0 0 12px ${color}` } : {}}

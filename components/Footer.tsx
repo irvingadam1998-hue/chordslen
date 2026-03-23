@@ -30,9 +30,9 @@ export default function Footer() {
     <footer className="border-t border-white/5 bg-[#080808] pt-12 pb-8 px-6">
       <div className="max-w-7xl mx-auto">
         {/* Top section */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-8 mb-12">
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-8 mb-10">
           {/* Brand */}
-          <div className="col-span-2 sm:col-span-3 lg:col-span-1 flex flex-col gap-3">
+          <div className="flex flex-col gap-3 max-w-xs">
             <Link href="/" className="flex items-center gap-2.5 group w-fit">
               <div className="w-7 h-7 rounded-lg bg-yellow-400 flex items-center justify-center shrink-0">
                 <span className="text-gray-950 font-black text-sm">♪</span>
@@ -47,6 +47,7 @@ export default function Footer() {
           </div>
 
           {/* Link columns */}
+          <div className="flex flex-wrap gap-10 sm:gap-12">
           {columns.map((col) => (
             <div key={col.heading} className="flex flex-col gap-3">
               <p className="text-white/60 text-xs font-semibold tracking-widest uppercase">
@@ -77,6 +78,7 @@ export default function Footer() {
               </ul>
             </div>
           ))}
+          </div>
         </div>
 
         {/* Bottom bar */}

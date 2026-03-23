@@ -10,7 +10,7 @@ export default function AfinadorPage() {
     <main className="min-h-screen text-white flex flex-col">
 
       {/* Header */}
-      <section className="border-b border-white/5 py-16 px-6 text-center">
+      <section className="border-b border-white/5 py-10 sm:py-16 px-4 sm:px-6 text-center">
         <div className="max-w-xl mx-auto flex flex-col items-center gap-4">
           <div className="inline-flex items-center gap-2 bg-yellow-400/10 border border-yellow-400/20 rounded-full px-4 py-1.5 text-yellow-400 text-xs font-medium tracking-wider">
             <span className="w-1.5 h-1.5 rounded-full bg-yellow-400" />
@@ -27,17 +27,17 @@ export default function AfinadorPage() {
       </section>
 
       {/* Tuner */}
-      <section className="flex-1 flex items-center justify-center px-6 py-16">
-        <div className="w-full max-w-sm bg-white/3 border border-white/8 rounded-2xl p-8">
+      <section className="flex-1 flex items-center justify-center px-4 sm:px-6 py-8 sm:py-16">
+        <div className="w-full max-w-sm bg-white/3 border border-white/8 rounded-2xl p-5 sm:p-8">
           <Tuner />
         </div>
       </section>
 
       {/* How to use */}
-      <section className="border-t border-white/5 py-16 px-6">
+      <section className="border-t border-white/5 py-10 sm:py-16 px-4 sm:px-6">
         <div className="max-w-2xl mx-auto">
-          <h2 className="text-sm font-semibold tracking-widest text-white/30 uppercase mb-8 text-center">Cómo usar</h2>
-          <div className="grid sm:grid-cols-3 gap-6">
+          <h2 className="text-sm font-semibold tracking-widest text-white/30 uppercase mb-6 sm:mb-8 text-center">Cómo usar</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
             {[
               { n: '01', title: 'Activa el micrófono', desc: 'Presiona el botón y permite el acceso al micrófono en el navegador.' },
               { n: '02', title: 'Toca una cuerda', desc: 'Pulsa la cuerda de tu guitarra cerca del micrófono. La nota detectada aparece en grande.' },

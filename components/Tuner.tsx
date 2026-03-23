@@ -225,13 +225,13 @@ export default function Tuner() {
     <div className="flex flex-col items-center gap-6 w-full max-w-sm mx-auto select-none">
 
       {/* ── String buttons ── */}
-      <div className="flex items-stretch gap-1.5">
+      <div className="flex items-stretch gap-1 sm:gap-1.5 w-full">
         {STRINGS.map((s) => {
           const isActive = active && hasSignal && strNum === s.num
           return (
             <div
               key={`${s.note}${s.sub}`}
-              className={`flex flex-col items-center justify-center gap-0.5 w-11 py-2.5 rounded-xl border transition-all duration-150 ${
+              className={`flex flex-col items-center justify-center gap-0.5 flex-1 py-2 sm:py-2.5 rounded-lg sm:rounded-xl border transition-all duration-150 ${
                 isActive
                   ? 'border-yellow-400 bg-yellow-400/10'
                   : 'border-white/8 bg-white/3'
