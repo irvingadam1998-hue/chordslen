@@ -2,36 +2,27 @@ import Link from 'next/link'
 
 const columns = [
   {
-    heading: 'Producto',
+    heading: 'Herramientas',
     links: [
-      { href: '/', label: 'Inicio' },
-      { href: '/precios', label: 'Precios' },
-      { href: '/changelog', label: 'Changelog' },
+      { href: '/', label: 'Detector de acordes' },
+      { href: '/afinador', label: 'Afinador' },
     ],
   },
-  {
-    heading: 'Recursos',
-    links: [
-      { href: '/glosario', label: 'Glosario' },
-      { href: '/blog', label: 'Blog' },
-      { href: '/ayuda', label: 'Ayuda' },
-    ],
-  },
-  {
-    heading: 'Legal',
-    links: [
-      { href: '/privacidad', label: 'Privacidad' },
-      { href: '/terminos', label: 'Términos' },
-    ],
-  },
-  {
-    heading: 'Tecnología',
-    links: [
-      { href: 'https://github.com/yt-dlp/yt-dlp', label: 'yt-dlp', external: true },
-      { href: 'https://librosa.org', label: 'librosa', external: true },
-      { href: 'https://nextjs.org', label: 'Next.js', external: true },
-    ],
-  },
+  // {
+  //   heading: 'Legal',
+  //   links: [
+  //     { href: '/privacidad', label: 'Privacidad' },
+  //     { href: '/terminos', label: 'Términos' },
+  //   ],
+  // },
+  // {
+  //   heading: 'Tecnología',
+  //   links: [
+  //     { href: 'https://github.com/yt-dlp/yt-dlp', label: 'yt-dlp', external: true },
+  //     { href: 'https://librosa.org', label: 'librosa', external: true },
+  //     { href: 'https://nextjs.org', label: 'Next.js', external: true },
+  //   ],
+  // },
 ]
 
 export default function Footer() {
@@ -51,7 +42,7 @@ export default function Footer() {
               </span>
             </Link>
             <p className="text-white/30 text-sm leading-relaxed max-w-xs">
-              Detectá los acordes de cualquier canción.
+              Detecta los acordes de cualquier canción.
             </p>
           </div>
 

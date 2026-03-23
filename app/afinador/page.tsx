@@ -39,9 +39,9 @@ export default function AfinadorPage() {
           <h2 className="text-sm font-semibold tracking-widest text-white/30 uppercase mb-8 text-center">Cómo usar</h2>
           <div className="grid sm:grid-cols-3 gap-6">
             {[
-              { n: '01', title: 'Activá el micrófono', desc: 'Presioná el botón y permitile acceso al micrófono al navegador.' },
-              { n: '02', title: 'Tocá una cuerda', desc: 'Pulsá la cuerda de tu guitarra cerca del micrófono. La nota detectada aparece en grande.' },
-              { n: '03', title: 'Ajustá hasta centrar', desc: 'La aguja muestra cuántos cents estás desviado. Cuando se pone amarilla, estás afinado.' },
+              { n: '01', title: 'Activa el micrófono', desc: 'Presiona el botón y permite el acceso al micrófono en el navegador.' },
+              { n: '02', title: 'Toca una cuerda', desc: 'Pulsa la cuerda de tu guitarra cerca del micrófono. La nota detectada aparece en grande.' },
+              { n: '03', title: 'Ajusta hasta centrar', desc: 'La aguja muestra cuántos cents estás desviado. Cuando se pone amarilla, está afinado.' },
             ].map(({ n, title, desc }) => (
               <div key={n} className="flex flex-col gap-3 p-5 rounded-xl bg-white/3 border border-white/8">
                 <span className="text-white/15 font-mono text-xs">{n}</span>

@@ -143,12 +143,12 @@ export default function Home() {
                 </div>
 
                 <h1 className="text-5xl sm:text-7xl font-black tracking-tighter leading-none">
-                  Descubrí los acordes<br />
+                  Descubre los acordes<br />
                   <span className="text-yellow-400">de cualquier canción</span>
                 </h1>
 
                 <p className="text-white/40 text-lg max-w-md leading-relaxed">
-                  Pegá una URL de YouTube y ChordLens analiza el audio para extraer los acordes reales, sincronizados con el video.
+                  Pega una URL de YouTube y ChordLens analiza el audio para extraer los acordes reales, sincronizados con el video.
                 </p>
 
                 <div className="w-full max-w-xl flex flex-col gap-3">
@@ -174,7 +174,7 @@ export default function Home() {
                     <div className="flex gap-2 w-full">
                       <label className="flex-1 flex items-center gap-3 px-4 py-3 rounded-xl bg-white/5 border border-white/10 cursor-pointer hover:border-yellow-400/40 transition-all text-sm">
                         <span className="text-white/40 shrink-0">MP3 / WAV / FLAC</span>
-                        <span className="text-white truncate">{selectedFile ? selectedFile.name : <span className="text-white/20">Seleccioná un archivo de audio...</span>}</span>
+                        <span className="text-white truncate">{selectedFile ? selectedFile.name : <span className="text-white/20">Selecciona un archivo de audio...</span>}</span>
                         <input
                           type="file"
                           accept="audio/*"
@@ -216,9 +216,9 @@ export default function Home() {
                 </div>
                 <div className="grid sm:grid-cols-3 gap-8">
                   {[
-                    { n: '01', icon: '🔗', title: 'Pegá la URL', desc: 'Copiá el link de cualquier video de YouTube y pegalo en el campo de búsqueda.' },
+                    { n: '01', icon: '🔗', title: 'Pega la URL', desc: 'Copia el link de cualquier video de YouTube y pégalo en el campo de búsqueda.' },
                     { n: '02', icon: '🎵', title: 'Análisis de audio', desc: 'Descargamos el audio y usamos análisis de frecuencia para detectar las notas y acordes presentes.' },
-                    { n: '03', icon: '🎸', title: 'Visualizá los acordes', desc: 'Obtenés un timeline sincronizado, mapa de acordes, transposición con capo y mucho más.' },
+                    { n: '03', icon: '🎸', title: 'Visualiza los acordes', desc: 'Obtén un timeline sincronizado, mapa de acordes, transposición con capo y mucho más.' },
                   ].map(({ n, icon, title, desc }) => (
                     <div key={n} className="flex flex-col gap-4 p-6 rounded-2xl bg-white/3 border border-white/8 hover:border-white/15 transition-colors">
                       <div className="flex items-center justify-between">
@@ -240,16 +240,16 @@ export default function Home() {
               <div className="max-w-5xl mx-auto">
                 <div className="text-center mb-16">
                   <p className="text-yellow-400 text-xs font-mono tracking-widest mb-3">FUNCIONALIDADES</p>
-                  <h2 className="text-3xl font-bold">Todo lo que necesitás</h2>
+                  <h2 className="text-3xl font-bold">Todo lo que necesitas</h2>
                 </div>
                 <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
                   {[
                     { icon: '🎹', title: 'Acordes reales', desc: 'Detecta los acordes del audio, no de la partitura. Lo que suena, no lo que está escrito.' },
-                    { icon: '🎸', title: 'Capo y transposición', desc: 'Seleccioná el traste del capo y los acordes se adaptan automáticamente a las posiciones que tenés que tocar.' },
-                    { icon: '📊', title: 'Mapa visual', desc: 'Visualizá toda la canción en una barra de colores que muestra qué acorde suena en cada momento.' },
+                    { icon: '🎸', title: 'Capo y transposición', desc: 'Selecciona el traste del capo y los acordes se adaptan automáticamente a las posiciones que tienes que tocar.' },
+                    { icon: '📊', title: 'Mapa visual', desc: 'Visualiza toda la canción en una barra de colores que muestra qué acorde suena en cada momento.' },
                     { icon: '▶️', title: 'Sincronizado con video', desc: 'El acorde activo se resalta en tiempo real mientras el video se reproduce.' },
                     { icon: '📝', title: 'Letra incluida', desc: 'Si está disponible, la letra de la canción aparece al lado del video para que puedas cantar.' },
-                    { icon: '⚡', title: 'Sin registro', desc: 'No hace falta cuenta, login ni pago. Solo pegás la URL y listo.' },
+                    { icon: '⚡', title: 'Sin registro', desc: 'No hace falta cuenta, login ni pago. Solo pega la URL y listo.' },
                   ].map(({ icon, title, desc }) => (
                     <div key={title} className="flex gap-4 p-5 rounded-xl bg-white/3 border border-white/8">
                       <span className="text-2xl shrink-0">{icon}</span>
@@ -267,7 +267,7 @@ export default function Home() {
             <section className="border-t border-white/5 py-24 px-6 text-center">
               <div className="max-w-xl mx-auto flex flex-col items-center gap-6">
                 <h2 className="text-3xl font-bold">¿Listo para empezar?</h2>
-                <p className="text-white/40 text-sm">Pegá cualquier link de YouTube y descubrí los acordes en segundos.</p>
+                <p className="text-white/40 text-sm">Pega cualquier link de YouTube y descubre los acordes en segundos.</p>
                 <UrlInput url={url} onChange={setUrl} onSubmit={handleAnalyze} disabled={step !== null} />
               </div>
             </section>
