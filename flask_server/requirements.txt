@@ -1,0 +1,7 @@
+flask>=3.0
+gunicorn>=21.0
+yt-dlp
+librosa
+numpy
+soundfile
+pytubefix

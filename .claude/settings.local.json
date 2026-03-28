@@ -3,7 +3,14 @@
     "allow": [
       "Bash(npm run:*)",
       "Bash(python -c \"import ast; ast.parse\\(open\\(''scripts/analyze.py''\\).read\\(\\)\\); print\\(''syntax OK''\\)\")",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npm install:*)",
+      "Bash(pip --version)",
+      "Bash(pip index:*)",
+      "Bash(pip install:*)",
+      "Bash(ffmpeg -version)",
+      "Bash(yt-dlp --version)"
     ]
   }
 }

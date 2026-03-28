@@ -1,78 +1,132 @@
-You are an expert in music theory and chord recognition.
+You are a senior backend engineer and audio processing expert.
 
-My system is now mostly correct (~80%), but it misses important harmonic chords, especially the dominant chord (like E major in A minor songs).
+I have a Python Flask server running on a VPS that downloads YouTube audio using yt-dlp and analyzes chords.
 
-Example:
-
-* In A minor songs, E major (V chord) is often missing
-* The system instead outputs Em or skips it entirely
-
-Your task is to IMPROVE harmonic intelligence.
-
----
-
-REQUIRED IMPROVEMENTS:
-
-1. DOMINANT CHORD BOOST
-
-* Detect key (e.g., A minor)
-* Identify dominant chord (E major)
-* Increase its score artificially (1.2–1.4x)
-
----
-
-2. CONTEXT-AWARE CORRECTION
-
-* If progression suggests dominant resolution:
-  F → E → Am
-  Dm → E → Am
-* Insert or favor E chord even if confidence is medium
-
----
-
-3. SECOND-BEST CHORD LOGIC
-
-* Keep top 2 chord candidates
-* If second candidate fits harmonic context better → use it
-
----
-
-4. FIX MINOR/MAJOR CONFUSION
-
-* If Em is detected but context suggests E → convert it
-
----
-
-5. TEMPLATE ADJUSTMENT
-
-* Reduce reliance on G# detection
-* Emphasize root (E) and fifth (B)
-
----
-
-6. MUSICAL RULES
-
-In A minor:
-
-* Strongly prefer:
-  Am, Dm, F, G, C, E
-* E should appear before resolving to Am
+My project is NOT just chord detection — it must return chords synchronized with time (like Riffstation or Chordify).
 
 ---
 
 GOAL:
 
-Recover missing harmonic chords (especially dominant chords)
-Make progression closer to real songs (like Bailamos)
+Build a SIMPLE but production-ready Flask API that:
+
+1. Downloads audio from YouTube
+2. Analyzes chords WITH TIMESTAMPS
+3. Returns time-synced chord progression
+4. Protects the API (API key)
+5. Prevents abuse (rate limiting)
+6. Cleans up files
 
 ---
 
-OUTPUT:
+RESPONSE FORMAT (VERY IMPORTANT):
 
-Provide code modifications focused on:
+Return chords like:
 
-* scoring adjustment
-* harmonic rules
-* context-based correction
+[
+{ "chord": "Am", "time": 0.0 },
+{ "chord": "F", "time": 2.5 },
+{ "chord": "G", "time": 5.1 }
+]
 
-Focus on musical correctness, not just raw detection.
+Time must be in seconds (float).
+
+---
+
+REQUIREMENTS:
+
+### 🎵 AUDIO PROCESSING
+
+* Use librosa
+* Load audio file
+* Split audio into frames/windows
+* Extract chroma features
+* Detect chord per segment
+* Smooth results (avoid too many rapid chord changes)
+* Only output chord when it changes
+
+---
+
+### ⏱️ TIMING
+
+* Track time per segment
+* Ensure timestamps match real audio progression
+
+---
+
+### 🧠 CHORD QUALITY
+
+* Avoid noisy/rare chords
+* Prefer common chords (Am, F, G, C, Dm, E, etc.)
+* Smooth transitions
+
+---
+
+### 🔐 SECURITY
+
+* Require API key in header `x-api-key`
+* Load key from environment variable
+* Return 401 if invalid
+
+---
+
+### 🚫 RATE LIMIT
+
+* Limit 1 request per IP every 5 seconds
+* Return 429 if exceeded
+
+---
+
+### 🧹 CLEANUP
+
+* Delete audio file after processing
+* Ensure cleanup even if error happens
+
+---
+
+### ⚠️ ERROR HANDLING
+
+* Always return JSON:
+  {
+  "success": false,
+  "error": "message"
+  }
+
+---
+
+### ⚡ PERFORMANCE
+
+* Keep everything in ONE FILE
+* No Redis, no queues, no microservices
+
+---
+
+### 📦 OUTPUT
+
+Return FULL working Python Flask code including:
+
+* yt-dlp download
+* chord detection with timestamps
+* API protection
+* rate limiting
+* cleanup
+
+---
+
+IMPORTANT:
+
+* Do NOT overcomplicate
+* Keep code readable and efficient
+* Focus on correct timing + chord stability
+
+---
+
+My current function:
+
+def analyze_audio(path):
+# improve this
+return [{"chord": "Am", "time": 0.0}]
+
+---
+
+Improve it to real chord + time detection.

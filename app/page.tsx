@@ -10,7 +10,9 @@ import AudioPlayer from '@/components/AudioPlayer'
 import LyricsDisplay from '@/components/LyricsDisplay'
 import TransposePanel from '@/components/TransposePanel'
 import ChordProgressBar from '@/components/ChordProgressBar'
-import { AnalysisResult } from '@/lib/types'
+import RangeSelector from '@/components/RangeSelector'
+import TranscriptionPanel from '@/components/TranscriptionPanel'
+import { AnalysisResult, TranscriptionResult } from '@/lib/types'
 import { transposeChord } from '@/lib/transpose'
 
 function extractVideoId(url: string): string | null {
@@ -44,6 +46,10 @@ export default function Home() {
   const [capo, setCapo] = useState(0)
   const [shift, setShift] = useState(0)
   const seekRef = useRef<((time: number) => void) | null>(null)
+  const [soloRange, setSoloRange] = useState<{ start: number; end: number } | null>(null)
+  const [transcription, setTranscription] = useState<TranscriptionResult | null>(null)
+  const [transcribing, setTranscribing] = useState(false)
+  const [transcribeError, setTranscribeError] = useState<string | null>(null)
 
   const transposeBy = ((shift - capo) % 12 + 12) % 12
   const videoId = analyzedUrl ? extractVideoId(analyzedUrl) : null
@@ -114,6 +120,29 @@ export default function Home() {
 
   const resetSearch = () => {
     setResult(null); setAnalyzedUrl(null); setAnalyzedFile(null); setCurrentTime(-1); setError(null); setCapo(0); setShift(0)
+    setSoloRange(null); setTranscription(null); setTranscribeError(null)
+  }
+
+  const handleTranscribe = async (start: number, end: number) => {
+    if (!analyzedUrl) return
+    setSoloRange({ start, end })
+    setTranscription(null)
+    setTranscribeError(null)
+    setTranscribing(true)
+    try {
+      const res = await fetch('/api/transcribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: analyzedUrl, start, end }),
+      })
+      const data = await res.json()
+      if (!res.ok || data.error) { setTranscribeError(data.error || 'Error desconocido'); return }
+      setTranscription(data)
+    } catch (err) {
+      setTranscribeError(err instanceof Error ? err.message : 'Error de red')
+    } finally {
+      setTranscribing(false)
+    }
   }
 
   const totalDuration = result && result.chords_timeline.length > 0
@@ -330,10 +359,34 @@ export default function Home() {
                 transposeBy={transposeBy}
                 onSeek={(t) => seekRef.current?.(t)}
               />
-              <p className="text-xs text-white/20 mt-2">
-                Cada segmento representa un acorde. Hacé click para saltar a esa parte.
-              </p>
             </section>
+
+            {/* 02b — Transcribir fragmento (solo con URL de YouTube) */}
+            {/* {videoId && analyzedUrl && (
+              <section className="flex flex-col gap-0">
+                <SectionLabel number="02b" title="Transcribir fragmento" />
+                <div className="bg-white/3 border border-white/8 rounded-2xl p-4 sm:p-6 flex flex-col gap-4">
+                  <RangeSelector
+                    totalDuration={totalDuration}
+                    currentTime={currentTime}
+                    onConfirm={handleTranscribe}
+                  />
+                  {transcribeError && (
+                    <div className="text-sm text-red-400 bg-red-950/40 border border-red-900/50 rounded-xl px-4 py-3">
+                      {transcribeError}
+                    </div>
+                  )}
+                  {(transcribing || transcription) && (
+                    <TranscriptionPanel
+                      data={transcription}
+                      loading={transcribing}
+                      currentTime={currentTime}
+                      rangeStart={soloRange?.start ?? 0}
+                    />
+                  )}
+                </div>
+              </section>
+            )} */}
 
             {/* 03 — Transposición y acordes */}
             <section className="flex flex-col gap-0">

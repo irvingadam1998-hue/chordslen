@@ -20,8 +20,9 @@ CHORD_INTERVALS = {
 }
 
 # Penalty multipliers: dim/aug penalized unless evidence is strong
+# '7' raised slightly to 0.95 (was 0.92) so dominant 7ths compete better
 CHORD_TYPE_PENALTY = {
-    'maj': 1.0, 'min': 1.0, 'm7': 0.92, '7': 0.92,
+    'maj': 1.0, 'min': 1.0, 'm7': 0.92, '7': 0.95,
     'maj7': 0.88, 'sus4': 0.82, 'dim': 0.65, 'aug': 0.65,
 }
 
@@ -79,9 +80,12 @@ def detect_chord_from_chroma(chroma_vec, templates, diatonic_set=None,
         score = float(np.dot(chroma_n, template / t_norm))
         # Penalize rare chord types
         score *= CHORD_TYPE_PENALTY.get(_chord_quality(chord_name), 1.0)
-        # Dominant chord boost — harmonic minor raises the V to major
+        # Dominant chord boost (V major) — harmonic minor raises the V to major
         if dominant_chord and chord_name == dominant_chord:
             score *= 1.35
+        # Dominant 7th boost (V7) — very common in all styles
+        if dominant_chord and chord_name == dominant_chord + '7':
+            score *= 1.30
         # Boost diatonic chords
         if diatonic_set and chord_name in diatonic_set:
             score *= 1.15
@@ -91,8 +95,8 @@ def detect_chord_from_chroma(chroma_vec, templates, diatonic_set=None,
         scored.append((score, chord_name))
 
     scored.sort(reverse=True)
-    best_score  = scored[0][0] if scored else 0.0
-    best_chord  = scored[0][1] if best_score > 0.45 else None
+    best_score   = scored[0][0] if scored else 0.0
+    best_chord   = scored[0][1] if best_score > 0.45 else None
     second_chord = scored[1][1] if len(scored) > 1 else None
     return best_chord, best_score, second_chord
 
@@ -138,16 +142,14 @@ def apply_harmonic_corrections(timeline, key_root, key_mode):
     Rules applied (minor keys only):
     1. Em detected immediately before the tonic → convert to E (V→I cadence).
     2. Em detected after a pre-dominant chord (IV, IVm, IIm) → convert to E.
-    3. Em sandwiched between any two chords where E fits better → convert to E
-       when second-best candidate was E.
     Also re-deduplicates and re-numbers measures after corrections.
     """
     if key_mode != 'minor' or not timeline:
         return timeline
 
     tonic     = NOTE_NAMES[key_root]
-    dominant  = NOTE_NAMES[(key_root + 7) % 12]          # e.g. 'E' in Am
-    dom_minor = dominant + 'm'                            # e.g. 'Em'
+    dominant  = NOTE_NAMES[(key_root + 7) % 12]   # e.g. 'E' in Am
+    dom_minor = dominant + 'm'                     # e.g. 'Em'
 
     pre_dominants = {
         NOTE_NAMES[(key_root + 5) % 12],        # IV  (F in Am)
@@ -185,14 +187,34 @@ def apply_harmonic_corrections(timeline, key_root, key_mode):
 
 
 def simplify_chord(chord):
-    """Strip extensions (maj7, m7, 7, etc.) keeping only root + major/minor/dim/aug."""
+    """
+    Strip complex extensions but KEEP:
+      - minor quality  (m)
+      - dim, aug
+      - sus2, sus4
+      - dominant 7th  (7)  ← B7, A7, C7, E7 etc. are preserved
+
+    Examples:
+      Bm7   → Bm     (minor 7th stripped to minor)
+      Cmaj7 → C      (major 7th stripped)
+      B7    → B7     (dominant 7th kept)
+      A7    → A7     (dominant 7th kept)
+      Bdim  → Bdim   (kept)
+      Csus4 → Csus4  (kept)
+    """
     import re
-    m = re.match(r'^([A-G][#b]?)(m(?!aj)|dim|aug|sus[24]?)?', chord)
+    m = re.match(
+        r'^([A-G][#b]?)'                   # root  (required)
+        r'(m(?!aj)|dim|aug|sus[24]?|7)?'   # quality: m / dim / aug / sus / 7
+        r'.*$',                             # discard everything else
+        chord
+    )
     if m:
-        root = m.group(1)
+        root    = m.group(1)
         quality = m.group(2) or ''
         return root + quality
     return chord
+
 
 class _QuietLogger:
     def debug(self, msg): pass
@@ -273,7 +295,6 @@ def download_via_invidious(video_id, tmpdir):
     import urllib.request
     import json as _j
 
-    # Public instances known to have API + proxy enabled
     INSTANCES = [
         'https://inv.nadeko.net',
         'https://invidious.privacyredirect.com',
@@ -285,7 +306,6 @@ def download_via_invidious(video_id, tmpdir):
     ]
 
     for instance in INSTANCES:
-        # Step 1: get adaptive formats list
         try:
             api_url = f'{instance}/api/v1/videos/{video_id}?fields=title,author,adaptiveFormats'
             req = urllib.request.Request(api_url, headers={'User-Agent': 'Mozilla/5.0'})
@@ -305,7 +325,6 @@ def download_via_invidious(video_id, tmpdir):
 
         audio.sort(key=lambda f: f.get('bitrate', 0), reverse=True)
 
-        # Step 2: download via Invidious proxy (local=true = proxied through their server)
         for fmt in audio[:3]:
             itag = fmt.get('itag')
             if not itag:
@@ -433,7 +452,6 @@ def download_via_piped(video_id, tmpdir):
         if not stream_url:
             continue
 
-        # Skip direct YouTube CDN URLs — they're IP-locked to Piped's server
         if 'googlevideo.com' in stream_url or 'youtube.com/videoplayback' in stream_url:
             sys.stderr.write(f'[piped] skipping IP-locked CDN URL\n')
             continue
@@ -456,6 +474,7 @@ def download_via_piped(video_id, tmpdir):
 
     sys.stderr.write('[piped] all streams were IP-locked or failed\n')
     return None
+
 
 def _analyze_audio(audio_path, title='', artist=''):
     """Analyze a local audio file and return the chord timeline."""
@@ -489,44 +508,63 @@ def _analyze_audio(audio_path, title='', artist=''):
     key_root, key_mode = detect_key(global_chroma)
     diatonic_set   = get_diatonic_chords(key_root, key_mode)
     dominant_chord = get_dominant_chord(key_root, key_mode)
-    # Include dominant in diatonic set (harmonic minor: V is major, not in natural minor)
+
+    # Always allow the V (dominant major) and V7
     diatonic_set.add(dominant_chord)
+    diatonic_set.add(dominant_chord + '7')
+
+    # Add dominant-7th versions of every diatonic major chord (secondary dominants).
+    # These are extremely common across blues, flamenco, pop, latin, etc.
+    # e.g. in Am: A7 (I7), D7 (IV7), G7 (VII7), C7 (III7) are all normal.
+    secondary_dominants = set()
+    for chord_name in list(diatonic_set):
+        if not any(chord_name.endswith(q) for q in ('m', 'dim', 'aug', '7')):
+            secondary_dominants.add(chord_name + '7')
+    diatonic_set.update(secondary_dominants)
+
+    # Common borrowed chords in minor keys
+    if key_mode == 'minor':
+        subtonic_root    = (key_root + 10) % 12   # bVII (e.g. G in Am)
+        subdominant_root = (key_root + 5)  % 12   # IV major (e.g. F in Am)
+        diatonic_set.add(NOTE_NAMES[subtonic_root])
+        diatonic_set.add(NOTE_NAMES[subtonic_root] + '7')
+        diatonic_set.add(NOTE_NAMES[subdominant_root])
+
     sys.stderr.write(
         f'[analyze] key={NOTE_NAMES[key_root]} {key_mode}, '
         f'dominant={dominant_chord}, diatonic={sorted(diatonic_set)}\n'
     )
 
-    # 4. Onset-based segmentation — higher delta + longer wait reduce over-detection
-    onset_frames = librosa.onset.onset_detect(
-        y=y_harmonic, sr=sr, hop_length=hop_length,
-        delta=0.15, pre_max=5, post_max=5, pre_avg=10, post_avg=10, wait=22,
-    )
-    onset_times = librosa.frames_to_time(onset_frames, sr=sr, hop_length=hop_length)
+    # 4. Fixed-window segmentation — more reliable than onset detection for
+    #    chords played on pads/synths/guitar with no sharp attack transient.
+    #    50 % overlap reduces boundary artefacts.
+    WINDOW_SECONDS = 0.5
+    STEP_SECONDS   = 0.25
 
-    segment_starts = list(onset_frames)
-    segment_ends   = list(onset_frames[1:]) + [n_frames]
-    if not segment_starts:
-        segment_starts, segment_ends, onset_times = [0], [n_frames], [0.0]
+    window_frames = max(1, int(WINDOW_SECONDS * sr / hop_length))
+    step_frames   = max(1, int(STEP_SECONDS   * sr / hop_length))
 
-    # 5. Per-segment chord detection
-    MIN_SEGMENT_DURATION = 0.5   # anything shorter is noise
-    CONFIDENCE_THRESHOLD = 0.50  # raised — require stronger evidence to change chord
+    # 5. Per-window chord detection
+    CONFIDENCE_THRESHOLD = 0.45   # min cosine similarity to accept a chord
+    DIATONIC_GATE        = 0.60   # out-of-key chords need this score
+    DOMINANT7_GATE       = 0.50   # lower gate specifically for dominant-7 chords
+    DEBOUNCE_COUNT       = 1      # 1 window is enough to commit to a new chord
 
-    raw_chords = []
-    raw_times  = []
+    raw_chords: list = []
+    raw_times:  list = []
 
-    # Debounce state: a chord must be confirmed in DEBOUNCE_COUNT consecutive
-    # segments before the output actually changes.
-    DEBOUNCE_COUNT = 2
-    current_chord  = None
-    cand_chord     = None
-    cand_count     = 0
+    current_chord = None
+    cand_chord    = None
+    cand_count    = 0
 
-    for start_f, end_f, t in zip(segment_starts, segment_ends, onset_times):
+    for start_f in range(0, n_frames, step_frames):
+        end_f = min(start_f + window_frames, n_frames)
+        t = float(start_f * hop_length / sr)
+
         seg_duration = (end_f - start_f) * hop_length / sr
-        if seg_duration < MIN_SEGMENT_DURATION:
+        if seg_duration < 0.15:
             raw_chords.append(current_chord)
-            raw_times.append(float(t))
+            raw_times.append(t)
             continue
 
         seg_chroma = chroma[:, start_f:end_f]
@@ -537,22 +575,26 @@ def _analyze_audio(audio_path, title='', artist=''):
         )
 
         if score < CONFIDENCE_THRESHOLD:
-            # Low confidence: try second-best if it's the dominant
-            if second_chord and second_chord == dominant_chord:
-                chord = dominant_chord
+            # Low confidence: rescue with dominant or dominant-7 if runner-up
+            if second_chord and (second_chord == dominant_chord or
+                                 second_chord == dominant_chord + '7'):
+                chord = second_chord
             else:
                 chord = current_chord
         elif chord:
             chord = simplify_chord(chord)
-            # Hard-restrict out-of-key chords: require very high confidence
-            if chord not in diatonic_set and score < 0.65:
-                # Second-best rescue: use it if it's diatonic
-                if second_chord and second_chord in diatonic_set:
-                    chord = simplify_chord(second_chord)
-                else:
-                    chord = current_chord
+            # Gate out-of-key chords — but use a lower gate for dominant-7 chords
+            # because they are inherently chromatic (secondary dominants / blues)
+            if chord not in diatonic_set:
+                is_dom7 = chord.endswith('7') and not chord.endswith('maj7')
+                gate = DOMINANT7_GATE if is_dom7 else DIATONIC_GATE
+                if score < gate:
+                    if second_chord and second_chord in diatonic_set:
+                        chord = simplify_chord(second_chord)
+                    else:
+                        chord = current_chord
 
-        # Debounce: only commit to a new chord after DEBOUNCE_COUNT confirmations
+        # Debounce: commit to a new chord only after DEBOUNCE_COUNT windows
         if chord == current_chord:
             cand_chord, cand_count = None, 0
         elif chord == cand_chord:
@@ -564,7 +606,7 @@ def _analyze_audio(audio_path, title='', artist=''):
             cand_chord, cand_count = chord, 1
 
         raw_chords.append(current_chord)
-        raw_times.append(float(t))
+        raw_times.append(t)
 
     # 6. Deduplicate consecutive identical chords
     deduped = []
@@ -574,8 +616,7 @@ def _analyze_audio(audio_path, title='', artist=''):
             deduped.append((time, chord))
             last_chord = chord
 
-    # 7. Merge short interruptions: X → Y(< 0.5s) → X  →  X
-    #    e.g. Am → Dm(0.2s) → Am  becomes  Am
+    # 7. Merge very short interruptions: X → Y(< 0.3 s) → X  →  X
     def _durations(seq):
         result = []
         for i in range(len(seq)):
@@ -585,7 +626,7 @@ def _analyze_audio(audio_path, title='', artist=''):
                 result.append(float('inf'))
         return result
 
-    MERGE_THRESHOLD = 0.5   # seconds
+    MERGE_THRESHOLD = 0.3   # seconds (was 0.5 — reduced to keep short real chords)
     changed = True
     while changed:
         changed = False
@@ -598,7 +639,6 @@ def _analyze_audio(audio_path, title='', artist=''):
                     and merged
                     and i + 1 < len(deduped)
                     and merged[-1][1] == deduped[i + 1][1]):
-                # Short interruption between two identical chords — skip it
                 changed = True
                 i += 1
                 continue
@@ -634,7 +674,7 @@ def _analyze_audio(audio_path, title='', artist=''):
 def validate_result(result, expected_str):
     """
     Compare detected chords against a known-correct progression.
-    expected_str: comma-separated chord names, e.g. "Am,Dm,G,F,E"
+    expected_str: comma-separated chord names, e.g. "Am,Dm,G,F,E7,A7"
     Prints a validation report to stderr and adds a 'validation' key to result.
     """
     if not result.get('success'):
@@ -647,7 +687,6 @@ def validate_result(result, expected_str):
         if not detected_unique or c != detected_unique[-1]:
             detected_unique.append(c)
 
-    # How many expected chords appear anywhere in the detected sequence
     detected_set = set(detected_unique)
     found     = [c for c in expected if c in detected_set]
     missing   = [c for c in expected if c not in detected_set]
@@ -777,8 +816,6 @@ def analyze_url(url):
         cookies_file = find_cookies_file()
         title, artist = _fetch_metadata(url, cookies_file)
 
-        # With cookies, the standard web client works best.
-        # Without cookies, try mobile clients that bypass bot detection.
         if cookies_file:
             yt_strategies = [['web'], ['android'], ['ios'], ['tv_embedded']]
         else:
@@ -852,7 +889,7 @@ if __name__ == '__main__':
         print(json.dumps({"success": False, "error": (
             "Uso: analyze.py <url> "
             "| analyze.py --file <ruta> "
-            "[--validate \"Am,Dm,G,F,E\"]"
+            "[--validate \"Am,Dm,G,F,E7,A7\"]"
         )}))
         sys.exit(1)
 
@@ -864,7 +901,7 @@ if __name__ == '__main__':
             expected_progression = args[idx + 1]
             args = args[:idx] + args[idx + 2:]
         else:
-            sys.stderr.write('[validate] --validate requires a chord list, e.g. "Am,Dm,G,F,E"\n')
+            sys.stderr.write('[validate] --validate requires a chord list, e.g. "Am,Dm,G,F,E7,A7"\n')
 
     if args[0] == '--file':
         if len(args) < 2:

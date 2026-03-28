@@ -5,6 +5,30 @@ export interface ChordEvent {
   measure: number
 }
 
+export interface TranscriptionNote {
+  time: number
+  midi: number
+  note: string
+  duration: number
+  confidence: number
+  string: number
+  fret: number
+}
+
+export interface TranscriptionResult {
+  notes: TranscriptionNote[]
+  tab: {
+    e: string
+    B: string
+    G: string
+    D: string
+    A: string
+    E: string
+  }
+  duration: number
+  bpm: number | null
+}
+
 export interface AnalysisResult {
   success: boolean
   notes_count: number
