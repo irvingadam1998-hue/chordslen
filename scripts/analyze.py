@@ -564,6 +564,12 @@ def download_via_piped(video_id, tmpdir):
 def _analyze_audio(audio_path, title='', artist=''):
     """Analyze a local audio file and return the chord timeline."""
     try:
+        audio_size = os.path.getsize(audio_path)
+    except OSError:
+        audio_size = -1
+    sys.stderr.write(f'[analyze] starting audio analysis: path={audio_path}, size={audio_size} bytes\n')
+
+    try:
         import numpy as np
     except ImportError:
         return {"success": False, "error": "numpy no instalado. Ejecuta: pip install numpy"}
@@ -576,7 +582,9 @@ def _analyze_audio(audio_path, title='', artist=''):
 
     MAX_DURATION = 360
     try:
+        sys.stderr.write('[analyze] loading audio with librosa...\n')
         y, sr = librosa.load(audio_path, sr=22050, mono=True, duration=MAX_DURATION)
+        sys.stderr.write(f'[analyze] loaded audio: samples={len(y)}, sr={sr}\n')
     except Exception as e:
         return {"success": False, "error": f"Error al cargar el audio: {str(e)}"}
 
@@ -808,6 +816,11 @@ def analyze_file_path(path):
     return _analyze_audio(path, title=title, artist='')
 
 
+def _parse_player_clients(value):
+    clients = [part.strip() for part in value.split(',') if part.strip()]
+    return clients or None
+
+
 def _ytdlp_download(url, tmpdir, player_clients, cookies_file=None):
     """Attempt yt-dlp download with the given player_clients list. Returns audio_path or None."""
     try:
@@ -824,13 +837,20 @@ def _ytdlp_download(url, tmpdir, player_clients, cookies_file=None):
             ffmpeg_path = winget_ffmpeg
             os.environ['PATH'] = os.path.dirname(ffmpeg_path) + os.pathsep + os.environ.get('PATH', '')
 
+    extractor_args = {'youtube': {'player_client': player_clients}}
+    po_token = os.environ.get('YTDLP_PO_TOKEN', '').strip()
+    po_client = os.environ.get('YTDLP_PO_TOKEN_CLIENT', 'android.gvs').strip() or 'android.gvs'
+    if po_token:
+        extractor_args['youtube']['po_token'] = f'{po_client}+{po_token}'
+        sys.stderr.write(f'[yt-dlp] using PO token for {po_client}\n')
+
     base_opts = {
         'outtmpl': os.path.join(tmpdir, 'audio.%(ext)s'),
         'quiet': True,
         'no_warnings': True,
         'noprogress': True,
         'logger': _QuietLogger(),
-        'extractor_args': {'youtube': {'player_client': player_clients}},
+        'extractor_args': extractor_args,
     }
     if cookies_file:
         base_opts['cookiefile'] = cookies_file
@@ -855,10 +875,28 @@ def _ytdlp_download(url, tmpdir, player_clients, cookies_file=None):
         sys.stderr.write(f'[yt-dlp] {player_clients} failed: {e}\n')
         return None
 
-    files = [f for f in os.listdir(tmpdir) if os.path.isfile(os.path.join(tmpdir, f))]
-    if files:
-        sys.stderr.write(f'[yt-dlp] {player_clients} succeeded\n')
-    return os.path.join(tmpdir, files[0]) if files else None
+    files = []
+    for f in os.listdir(tmpdir):
+        full = os.path.join(tmpdir, f)
+        if not os.path.isfile(full):
+            continue
+        lower = f.lower()
+        if lower.endswith(('.wav', '.m4a', '.mp3', '.webm', '.opus', '.ogg', '.aac')):
+            files.append(full)
+
+    if not files:
+        sys.stderr.write(f'[yt-dlp] {player_clients} produced no audio file\n')
+        return None
+
+    files.sort(key=lambda p: os.path.getsize(p), reverse=True)
+    audio_path = files[0]
+    size = os.path.getsize(audio_path)
+    if size < 10000:
+        sys.stderr.write(f'[yt-dlp] {player_clients} produced tiny audio file ({size} bytes)\n')
+        return None
+
+    sys.stderr.write(f'[yt-dlp] {player_clients} succeeded with {os.path.basename(audio_path)} ({size} bytes)\n')
+    return audio_path
 
 
 def analyze_url(url):
@@ -907,7 +945,10 @@ def analyze_url(url):
         cookies_file = find_cookies_file()
         title, artist = _fetch_metadata(url, cookies_file)
 
-        if cookies_file:
+        configured_clients = _parse_player_clients(os.environ.get('YTDLP_PLAYER_CLIENTS', ''))
+        if configured_clients:
+            yt_strategies = [[client] for client in configured_clients]
+        elif cookies_file:
             yt_strategies = [['web'], ['android'], ['ios'], ['tv_embedded']]
         else:
             yt_strategies = [['android'], ['ios'], ['android_embedded'], ['tv_embedded']]
