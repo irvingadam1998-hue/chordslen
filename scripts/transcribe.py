@@ -11,6 +11,8 @@ import tempfile
 import shutil
 import subprocess
 import math
+import urllib.request
+import base64
 
 NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 
@@ -151,37 +153,121 @@ def detect_notes_librosa(audio_path: str) -> list:
 
     return notes
 
+
+def _http_download(url, dest_path, headers=None, timeout=180):
+    req_headers = {'User-Agent': 'ChordLens/1.0'}
+    if headers:
+        req_headers.update(headers)
+    req = urllib.request.Request(url, headers=req_headers)
+    with urllib.request.urlopen(req, timeout=timeout) as resp, open(dest_path, 'wb') as f:
+        while True:
+            chunk = resp.read(65536)
+            if not chunk:
+                break
+            f.write(chunk)
+    return os.path.getsize(dest_path)
+
+
+def _remote_extractor_base():
+    return os.environ.get('REMOTE_EXTRACTOR_URL', '').strip().rstrip('/')
+
+
+def _remote_extractor_fragment(url: str, start: float, end: float, tmpdir: str):
+    base = _remote_extractor_base()
+    if not base:
+        return None
+
+    token = os.environ.get('REMOTE_EXTRACTOR_TOKEN', '').strip()
+    headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'User-Agent': 'ChordLens/1.0',
+    }
+    if token:
+        headers['Authorization'] = f'Bearer {token}'
+        headers['x-api-key'] = token
+
+    endpoint = os.environ.get('REMOTE_EXTRACTOR_FRAGMENT_PATH', '/fragment').strip() or '/fragment'
+    req = urllib.request.Request(
+        base + endpoint,
+        data=json.dumps({
+            'url': url,
+            'start': start,
+            'end': end,
+            'format': 'wav',
+        }).encode('utf-8'),
+        headers=headers,
+        method='POST',
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=180) as resp:
+            data = json.loads(resp.read())
+    except Exception as e:
+        print(f"[remote-extractor] fragment request failed: {e}", file=sys.stderr)
+        return None
+
+    if data.get('success') is False:
+        print(f"[remote-extractor] fragment error: {data.get('error', 'unknown')}", file=sys.stderr)
+        return None
+
+    ext = (data.get('ext') or 'wav').strip('.')
+    audio_path = os.path.join(tmpdir, f'fragment.{ext}')
+    remote_url = data.get('audio_url') or data.get('download_url') or data.get('url')
+    if remote_url:
+        try:
+            size = _http_download(remote_url, audio_path, timeout=240)
+            print(f"[remote-extractor] fragment downloaded {size} bytes", file=sys.stderr)
+            if size > 10000:
+                return audio_path
+        except Exception as e:
+            print(f"[remote-extractor] fragment download failed: {e}", file=sys.stderr)
+
+    encoded = data.get('audio_base64') or data.get('content_base64') or data.get('data_base64')
+    if encoded:
+        try:
+            with open(audio_path, 'wb') as f:
+                f.write(base64.b64decode(encoded))
+            if os.path.getsize(audio_path) > 10000:
+                return audio_path
+        except Exception as e:
+            print(f"[remote-extractor] fragment base64 decode failed: {e}", file=sys.stderr)
+
+    return None
+
 def transcribe(url: str, start: float, end: float) -> dict:
     tmpdir = tempfile.mkdtemp(prefix='chordlens_transcribe_')
     try:
         # ── 1. Descargar fragmento ────────────────────────────────────────────
         out_template = os.path.join(tmpdir, 'fragment.%(ext)s')
         section = f"*{start}-{end}"
+        audio_path = _remote_extractor_fragment(url, start, end, tmpdir)
 
-        dl = subprocess.run(
-            [
-                'yt-dlp',
-                '--download-sections', section,
-                '--force-keyframes-at-cuts',
-                '-x', '--audio-format', 'wav',
-                '--audio-quality', '0',
-                '-o', out_template,
-                '--no-playlist',
-                '--quiet',
-                url,
-            ],
-            capture_output=True, text=True, timeout=120
-        )
+        if not audio_path:
+            dl = subprocess.run(
+                [
+                    'yt-dlp',
+                    '--download-sections', section,
+                    '--force-keyframes-at-cuts',
+                    '-x', '--audio-format', 'wav',
+                    '--audio-quality', '0',
+                    '-o', out_template,
+                    '--no-playlist',
+                    '--quiet',
+                    url,
+                ],
+                capture_output=True, text=True, timeout=120
+            )
 
-        wav_files = [f for f in os.listdir(tmpdir) if f.endswith('.wav')]
-        if not wav_files:
-            err = dl.stderr[:500] if dl.stderr else 'Archivo no descargado'
-            return {'success': False, 'error': f'yt-dlp falló: {err}'}
+            wav_files = [f for f in os.listdir(tmpdir) if f.endswith('.wav')]
+            if not wav_files:
+                err = dl.stderr[:500] if dl.stderr else 'Archivo no descargado'
+                return {'success': False, 'error': f'yt-dlp falló: {err}'}
 
-        audio_path = os.path.join(tmpdir, wav_files[0])
+            audio_path = os.path.join(tmpdir, wav_files[0])
         fragment_duration = end - start
 
-        print(f"[transcribe] audio={wav_files[0]}, size={os.path.getsize(audio_path)} bytes", file=sys.stderr)
+        print(f"[transcribe] audio={os.path.basename(audio_path)}, size={os.path.getsize(audio_path)} bytes", file=sys.stderr)
 
         # ── 2. Detectar notas ────────────────────────────────────────────────
         notes_raw = detect_notes_librosa(audio_path)

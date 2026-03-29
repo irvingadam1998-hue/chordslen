@@ -4,6 +4,8 @@ import json
 import os
 import tempfile
 import shutil
+import urllib.request
+import base64
 
 NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 
@@ -272,7 +274,6 @@ def extract_video_id(url):
 
 def _http_download(url, dest_path, headers=None, timeout=180):
     """Download url to dest_path. Returns file size or raises."""
-    import urllib.request
     h = {'User-Agent': 'Mozilla/5.0 (compatible; ChordLens/1.0)'}
     if headers:
         h.update(headers)
@@ -284,6 +285,90 @@ def _http_download(url, dest_path, headers=None, timeout=180):
                 break
             f.write(chunk)
     return os.path.getsize(dest_path)
+
+
+def _download_bytes(dest_path, payload):
+    with open(dest_path, 'wb') as f:
+        f.write(payload)
+    return os.path.getsize(dest_path)
+
+
+def _remote_extractor_base():
+    return os.environ.get('REMOTE_EXTRACTOR_URL', '').strip().rstrip('/')
+
+
+def _remote_extractor_headers():
+    headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'User-Agent': 'ChordLens/1.0',
+    }
+    token = os.environ.get('REMOTE_EXTRACTOR_TOKEN', '').strip()
+    if token:
+        headers['Authorization'] = f'Bearer {token}'
+        headers['x-api-key'] = token
+    return headers
+
+
+def _remote_extractor_fetch(endpoint_path, payload):
+    base = _remote_extractor_base()
+    if not base:
+        return None
+
+    req = urllib.request.Request(
+        base + endpoint_path,
+        data=json.dumps(payload).encode('utf-8'),
+        headers=_remote_extractor_headers(),
+        method='POST',
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=180) as resp:
+            data = json.loads(resp.read())
+    except Exception as e:
+        sys.stderr.write(f'[remote-extractor] request failed: {e}\n')
+        return None
+
+    if data.get('success') is False:
+        sys.stderr.write(f"[remote-extractor] error: {data.get('error', 'unknown')}\n")
+        return None
+
+    return data
+
+
+def _remote_extractor_audio(url, tmpdir):
+    endpoint = os.environ.get('REMOTE_EXTRACTOR_AUDIO_PATH', '/audio').strip() or '/audio'
+    data = _remote_extractor_fetch(endpoint, {'url': url, 'format': 'wav'})
+    if not data:
+        return None
+
+    title = data.get('title', '')
+    artist = data.get('artist', '')
+    ext = (data.get('ext') or 'wav').strip('.')
+    audio_path = os.path.join(tmpdir, f'remote_audio.{ext}')
+
+    remote_url = data.get('audio_url') or data.get('download_url') or data.get('url')
+    if remote_url:
+        try:
+            size = _http_download(remote_url, audio_path, timeout=240)
+            sys.stderr.write(f'[remote-extractor] downloaded {size} bytes from URL\n')
+            if size > 10000:
+                return audio_path, title, artist
+        except Exception as e:
+            sys.stderr.write(f'[remote-extractor] URL download failed: {e}\n')
+
+    encoded = data.get('audio_base64') or data.get('content_base64') or data.get('data_base64')
+    if encoded:
+        try:
+            size = _download_bytes(audio_path, base64.b64decode(encoded))
+            sys.stderr.write(f'[remote-extractor] wrote {size} bytes from base64\n')
+            if size > 10000:
+                return audio_path, title, artist
+        except Exception as e:
+            sys.stderr.write(f'[remote-extractor] base64 decode failed: {e}\n')
+
+    sys.stderr.write('[remote-extractor] response had no usable audio payload\n')
+    return None
 
 
 def download_via_invidious(video_id, tmpdir):
@@ -781,6 +866,12 @@ def analyze_url(url):
     sys.stderr.write(f'[analyze_url] video_id={video_id}\n')
 
     with tempfile.TemporaryDirectory() as tmpdir:
+        if _remote_extractor_base():
+            sys.stderr.write('[analyze_url] trying remote extractor...\n')
+            remote_result = _remote_extractor_audio(url, tmpdir)
+            if remote_result:
+                audio_path, title, artist = remote_result
+                return _analyze_audio(audio_path, title=title, artist=artist)
 
         # ── Strategy 1: Invidious proxy (local=true hides Railway IP) ─────────
         if video_id:
@@ -839,8 +930,8 @@ def analyze_url(url):
             else:
                 msg = (
                     "YouTube bloquea las descargas desde servidores (detección de bots). "
-                    "Solución: exporta tus cookies de YouTube y agrega la variable YOUTUBE_COOKIES_B64 en Railway. "
-                    "Instrucciones en los logs del servidor."
+                    "Prueba un extractor remoto con REMOTE_EXTRACTOR_URL o exporta cookies de YouTube "
+                    "y agrega la variable YOUTUBE_COOKIES_B64 en Railway. Instrucciones en los logs del servidor."
                 )
             sys.stderr.write('[analyze_url] ALL strategies failed\n')
             sys.stderr.write('=' * 60 + '\n')

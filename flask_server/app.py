@@ -23,6 +23,7 @@ from flask import Flask, request, jsonify
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'scripts'))
 try:
     from analyze import analyze_url, analyze_file_path
+    from transcribe import transcribe
 except ImportError as e:
     print(f"ERROR: could not import analyze.py — {e}", file=sys.stderr)
     sys.exit(1)
@@ -96,6 +97,34 @@ def analyze():
 
     try:
         result = analyze_url(url)
+        status = 200 if result.get('success') else 500
+        return jsonify(result), status
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/transcribe', methods=['POST'])
+def transcribe_route():
+    auth_error = _check_auth()
+    if auth_error:
+        return auth_error
+
+    data = request.get_json(silent=True) or {}
+    url = str(data.get('url', '')).strip()
+    start = data.get('start')
+    end = data.get('end')
+
+    if not url:
+        return jsonify({'success': False, 'error': 'URL requerida'}), 400
+    if not isinstance(start, (int, float)) or not isinstance(end, (int, float)):
+        return jsonify({'success': False, 'error': 'start y end requeridos'}), 400
+    if end <= start:
+        return jsonify({'success': False, 'error': 'end debe ser mayor que start'}), 400
+    if end - start > 60:
+        return jsonify({'success': False, 'error': 'Máximo 60 segundos por transcripción'}), 400
+
+    try:
+        result = transcribe(url, float(start), float(end))
         status = 200 if result.get('success') else 500
         return jsonify(result), status
     except Exception as e:
