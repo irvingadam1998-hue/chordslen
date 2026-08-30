@@ -50,6 +50,16 @@ export async function POST(req: NextRequest) {
     )
 
   // ── Remote extractor si está configurado ────────────────────────────────
+  console.log('[frontend-transcribe-env]', {
+    REMOTE_EXTRACTOR_URL: process.env.REMOTE_EXTRACTOR_URL || null,
+    REMOTE_EXTRACTOR_TOKEN: process.env.REMOTE_EXTRACTOR_TOKEN
+      ? 'set'
+      : 'missing',
+    FLASK_API_URL: process.env.FLASK_API_URL || null,
+    FLASK_API_KEY: process.env.FLASK_API_KEY ? 'set' : 'missing',
+    API_KEY: process.env.API_KEY ? 'set' : 'missing',
+  })
+
   const extractorUrl = (
     process.env.REMOTE_EXTRACTOR_URL || process.env.FLASK_API_URL
   )?.replace(/\/$/, '')
