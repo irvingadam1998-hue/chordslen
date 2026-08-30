@@ -113,7 +113,7 @@ export async function POST(req: NextRequest) {
         process.env.FLASK_API_KEY ||
         process.env.API_KEY ||
         fallbackExtractorToken
-      const res = await fetch(`${extractorUrl}/analyze`, {
+      const res = await fetch(`${extractorUrl}/audio`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

@@ -76,7 +76,7 @@ export async function POST(req: NextRequest) {
         process.env.FLASK_API_KEY ||
         process.env.API_KEY ||
         fallbackExtractorToken
-      const res = await fetch(`${extractorUrl}/transcribe`, {
+      const res = await fetch(`${extractorUrl}/fragment`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
