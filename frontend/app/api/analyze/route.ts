@@ -85,39 +85,29 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  // ── Route to remote extractor if configured, else run Python locally ───
-  const fallbackExtractorUrl = 'https://chordslen-production.up.railway.app'
-  const fallbackExtractorToken = '7f9a8d2c1b4e5f6a8c9d0e1f2a3b4c5d'
+  // ── Ruta fija temporal al backend de producción ───────────────────────
+  const FALLBACK_BACKEND_URL = 'https://chordslen-production.up.railway.app'
+  const FALLBACK_BACKEND_KEY = '7f9a8d2c1b4e5f6a8c9d0e1f2a3b4c5d'
 
-  console.log('[frontend-analyze-env]', {
-    REMOTE_EXTRACTOR_URL:
-      process.env.REMOTE_EXTRACTOR_URL || fallbackExtractorUrl,
-    REMOTE_EXTRACTOR_TOKEN: process.env.REMOTE_EXTRACTOR_TOKEN
-      ? 'set'
-      : 'hardcoded',
-    FLASK_API_URL: process.env.FLASK_API_URL || null,
-    FLASK_API_KEY: process.env.FLASK_API_KEY ? 'set' : 'missing',
-    API_KEY: process.env.API_KEY ? 'set' : 'missing',
-  })
-
-  const extractorUrl = (
-    process.env.REMOTE_EXTRACTOR_URL ||
+  const backendUrl = (
     process.env.FLASK_API_URL ||
-    fallbackExtractorUrl
-  )?.replace(/\/$/, '')
+    process.env.REMOTE_EXTRACTOR_URL ||
+    FALLBACK_BACKEND_URL
+  ).replace(/\/$/, '')
 
-  if (extractorUrl) {
+  if (backendUrl) {
     try {
-      const extractorKey =
-        process.env.REMOTE_EXTRACTOR_TOKEN ||
+      const backendKey =
         process.env.FLASK_API_KEY ||
+        process.env.REMOTE_EXTRACTOR_TOKEN ||
         process.env.API_KEY ||
-        fallbackExtractorToken
-      const res = await fetch(`${extractorUrl}/audio`, {
+        FALLBACK_BACKEND_KEY
+
+      const res = await fetch(`${backendUrl}/analyze`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(extractorKey ? { 'x-api-key': extractorKey } : {}),
+          ...(backendKey ? { 'x-api-key': backendKey } : {}),
         },
         body: JSON.stringify({ url }),
         signal: AbortSignal.timeout(300000),
