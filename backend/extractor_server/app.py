@@ -3,6 +3,7 @@ import atexit
 import base64
 import os
 import shutil
+import sys
 import tempfile
 import threading
 import time
@@ -10,6 +11,15 @@ import uuid
 from pathlib import Path
 
 from flask import Flask, jsonify, request, send_file
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
+try:
+    from analyze import analyze_url
+    from transcribe import transcribe as transcribe_fragment
+except ImportError as e:
+    analyze_url = None
+    transcribe_fragment = None
+    print(f'[extractor_server] warning: no analysis/transcribe modules loaded: {e}', file=sys.stderr)
 
 
 app = Flask(__name__)
@@ -181,6 +191,59 @@ def _cleanup_loop():
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({'ok': True, 'time': int(time.time())})
+
+
+@app.route('/analyze', methods=['POST'])
+def analyze():
+    auth = _check_auth()
+    if auth:
+        return auth
+
+    data = request.get_json(silent=True) or {}
+    url = str(data.get('url', '')).strip()
+    if not url:
+        return jsonify({'success': False, 'error': 'URL requerida'}), 400
+
+    if analyze_url is None:
+        return jsonify({'success': False, 'error': 'Módulo de análisis no disponible'}), 500
+
+    try:
+        result = analyze_url(url)
+        status = 200 if result.get('success') else 500
+        return jsonify(result), status
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/transcribe', methods=['POST'])
+def transcribe_route():
+    auth = _check_auth()
+    if auth:
+        return auth
+
+    data = request.get_json(silent=True) or {}
+    url = str(data.get('url', '')).strip()
+    start = data.get('start')
+    end = data.get('end')
+
+    if not url:
+        return jsonify({'success': False, 'error': 'URL requerida'}), 400
+    if not isinstance(start, (int, float)) or not isinstance(end, (int, float)):
+        return jsonify({'success': False, 'error': 'start y end requeridos'}), 400
+    if float(end) <= float(start):
+        return jsonify({'success': False, 'error': 'end debe ser mayor que start'}), 400
+    if float(end) - float(start) > 60:
+        return jsonify({'success': False, 'error': 'Máximo 60 segundos por transcripción'}), 400
+
+    if transcribe_fragment is None:
+        return jsonify({'success': False, 'error': 'Módulo de transcripción no disponible'}), 500
+
+    try:
+        result = transcribe_fragment(url, float(start), float(end))
+        status = 200 if result.get('success') else 500
+        return jsonify(result), status
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/audio', methods=['POST'])
