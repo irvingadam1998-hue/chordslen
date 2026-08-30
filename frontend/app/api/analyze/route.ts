@@ -43,7 +43,10 @@ export async function POST(req: NextRequest) {
   if (requiredKey) {
     const providedKey = req.headers.get('x-api-key')
     if (providedKey !== requiredKey) {
-      return NextResponse.json({ error: 'API key inválida o ausente' }, { status: 401 })
+      return NextResponse.json(
+        { error: 'API key inválida o ausente' },
+        { status: 401 }
+      )
     }
   }
 
@@ -51,7 +54,10 @@ export async function POST(req: NextRequest) {
   const ip = getClientIp(req)
   if (isRateLimited(ip)) {
     return NextResponse.json(
-      { error: 'Demasiadas solicitudes. Espera 5 segundos antes de intentar de nuevo.' },
+      {
+        error:
+          'Demasiadas solicitudes. Espera 5 segundos antes de intentar de nuevo.',
+      },
       { status: 429 }
     )
   }
@@ -60,7 +66,10 @@ export async function POST(req: NextRequest) {
   try {
     body = await req.json()
   } catch {
-    return NextResponse.json({ error: 'JSON inválido en el cuerpo de la solicitud' }, { status: 400 })
+    return NextResponse.json(
+      { error: 'JSON inválido en el cuerpo de la solicitud' },
+      { status: 400 }
+    )
   }
 
   const { url } = body
@@ -70,21 +79,29 @@ export async function POST(req: NextRequest) {
   }
 
   if (!isYouTubeUrl(url)) {
-    return NextResponse.json({ error: 'La URL debe ser de YouTube' }, { status: 400 })
+    return NextResponse.json(
+      { error: 'La URL debe ser de YouTube' },
+      { status: 400 }
+    )
   }
 
-  // ── Route to Flask VPS if configured, else run Python locally ───────────
-  const flaskUrl = process.env.FLASK_API_URL?.replace(/\/$/, '')
+  // ── Route to remote extractor if configured, else run Python locally ───
+  const extractorUrl = (
+    process.env.REMOTE_EXTRACTOR_URL || process.env.FLASK_API_URL
+  )?.replace(/\/$/, '')
 
-  if (flaskUrl) {
-    // Call Flask server on VPS
+  if (extractorUrl) {
     try {
-      const flaskKey = process.env.FLASK_API_KEY || process.env.API_KEY || ''
-      const res = await fetch(`${flaskUrl}/analyze`, {
+      const extractorKey =
+        process.env.REMOTE_EXTRACTOR_TOKEN ||
+        process.env.FLASK_API_KEY ||
+        process.env.API_KEY ||
+        ''
+      const res = await fetch(`${extractorUrl}/analyze`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(flaskKey ? { 'x-api-key': flaskKey } : {}),
+          ...(extractorKey ? { 'x-api-key': extractorKey } : {}),
         },
         body: JSON.stringify({ url }),
         signal: AbortSignal.timeout(300000),
@@ -95,7 +112,10 @@ export async function POST(req: NextRequest) {
       }
       return NextResponse.json(parsed)
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Error al contactar el servidor de análisis'
+      const msg =
+        err instanceof Error
+          ? err.message
+          : 'Error al contactar el servidor de análisis'
       return NextResponse.json({ error: msg }, { status: 500 })
     }
   }
@@ -106,12 +126,17 @@ export async function POST(req: NextRequest) {
   const result = await new Promise<string>((resolve, reject) => {
     const timeout = setTimeout(() => {
       child.kill()
-      reject(new Error('Timeout: el análisis tardó más de 5 minutos. Intenta con una canción más corta.'))
+      reject(
+        new Error(
+          'Timeout: el análisis tardó más de 5 minutos. Intenta con una canción más corta.'
+        )
+      )
     }, 300000)
 
-    const pythonCmd = process.platform === 'win32'
-      ? 'python'
-      : path.join(process.cwd(), '.venv', 'bin', 'python')
+    const pythonCmd =
+      process.platform === 'win32'
+        ? 'python'
+        : path.join(process.cwd(), '.venv', 'bin', 'python')
     const child = spawn(pythonCmd, [scriptPath, url], {
       stdio: ['ignore', 'pipe', 'pipe'],
     })
@@ -130,7 +155,11 @@ export async function POST(req: NextRequest) {
     child.on('error', (err: NodeJS.ErrnoException) => {
       clearTimeout(timeout)
       if (err.code === 'ENOENT') {
-        reject(new Error('Python no está instalado o no está en el PATH. Instala Python 3.8+ para continuar.'))
+        reject(
+          new Error(
+            'Python no está instalado o no está en el PATH. Instala Python 3.8+ para continuar.'
+          )
+        )
       } else {
         reject(err)
       }
@@ -139,7 +168,9 @@ export async function POST(req: NextRequest) {
     child.on('close', (code: number) => {
       clearTimeout(timeout)
       if (code !== 0 && !stdout) {
-        reject(new Error(stderr || `El script Python terminó con código ${code}`))
+        reject(
+          new Error(stderr || `El script Python terminó con código ${code}`)
+        )
       } else {
         resolve(stdout)
       }
