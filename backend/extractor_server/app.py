@@ -31,6 +31,9 @@ TMP_ROOT.mkdir(parents=True, exist_ok=True)
 
 _file_index: dict[str, dict[str, object]] = {}
 _lock = threading.Lock()
+_jobs: dict[str, dict[str, object]] = {}
+_jobs_lock = threading.Lock()
+JOB_TTL_SECONDS = int(os.environ.get('JOB_TTL_SECONDS', '300'))
 
 
 def _check_auth():
@@ -196,7 +199,56 @@ def _cleanup_expired():
 def _cleanup_loop():
     while True:
         _cleanup_expired()
+        _cleanup_jobs()
         time.sleep(60)
+
+
+def _cleanup_jobs():
+    now = time.time()
+    expired = []
+    with _jobs_lock:
+        for job_id, job in list(_jobs.items()):
+            stored_at = float(job.get('stored_at', 0))
+            if now - stored_at > JOB_TTL_SECONDS:
+                expired.append(job_id)
+        for job_id in expired:
+            _jobs.pop(job_id, None)
+
+
+def _run_analysis_job(job_id: str, url: str):
+    try:
+        result = analyze_url(url)
+        with _jobs_lock:
+            _jobs[job_id] = {
+                'status': 'done',
+                'result': result,
+                'stored_at': time.time(),
+            }
+    except Exception as exc:
+        with _jobs_lock:
+            _jobs[job_id] = {
+                'status': 'failed',
+                'error': str(exc),
+                'stored_at': time.time(),
+            }
+
+
+def _run_transcribe_job(job_id: str, url: str, start: float, end: float):
+    try:
+        result = transcribe_fragment(url, start, end)
+        with _jobs_lock:
+            _jobs[job_id] = {
+                'status': 'done',
+                'result': result,
+                'stored_at': time.time(),
+            }
+    except Exception as exc:
+        with _jobs_lock:
+            _jobs[job_id] = {
+                'status': 'failed',
+                'error': str(exc),
+                'stored_at': time.time(),
+            }
 
 
 @app.route('/health', methods=['GET'])
@@ -218,12 +270,35 @@ def analyze():
     if analyze_url is None:
         return jsonify({'success': False, 'error': 'Módulo de análisis no disponible'}), 500
 
-    try:
-        result = analyze_url(url)
-        status = 200 if result.get('success') else 500
-        return jsonify(result), status
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+    job_id = uuid.uuid4().hex
+    with _jobs_lock:
+        _jobs[job_id] = {'status': 'processing', 'stored_at': time.time()}
+
+    threading.Thread(target=_run_analysis_job, args=(job_id, url), daemon=True).start()
+    return jsonify({'job_id': job_id, 'status': 'processing'}), 202
+
+
+@app.route('/status/<job_id>', methods=['GET'])
+def analyze_status(job_id: str):
+    auth = _check_auth()
+    if auth:
+        return auth
+
+    _cleanup_jobs()
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+
+    if not job:
+        return jsonify({'success': False, 'error': 'Job no encontrado'}), 404
+
+    if job.get('status') == 'processing':
+        return jsonify({'job_id': job_id, 'status': 'processing'}), 202
+
+    if job.get('status') == 'failed':
+        return jsonify({'job_id': job_id, 'status': 'failed', 'error': job.get('error', 'Error desconocido')}), 500
+
+    result = job.get('result', {})
+    return jsonify({'job_id': job_id, 'status': 'done', **result}), 200
 
 
 @app.route('/transcribe', methods=['POST'])
@@ -249,12 +324,39 @@ def transcribe_route():
     if transcribe_fragment is None:
         return jsonify({'success': False, 'error': 'Módulo de transcripción no disponible'}), 500
 
-    try:
-        result = transcribe_fragment(url, float(start), float(end))
-        status = 200 if result.get('success') else 500
-        return jsonify(result), status
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+    job_id = uuid.uuid4().hex
+    with _jobs_lock:
+        _jobs[job_id] = {'status': 'processing', 'stored_at': time.time()}
+
+    threading.Thread(
+        target=_run_transcribe_job,
+        args=(job_id, url, float(start), float(end)),
+        daemon=True,
+    ).start()
+    return jsonify({'job_id': job_id, 'status': 'processing'}), 202
+
+
+@app.route('/transcribe/status/<job_id>', methods=['GET'])
+def transcribe_status(job_id: str):
+    auth = _check_auth()
+    if auth:
+        return auth
+
+    _cleanup_jobs()
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+
+    if not job:
+        return jsonify({'success': False, 'error': 'Job no encontrado'}), 404
+
+    if job.get('status') == 'processing':
+        return jsonify({'job_id': job_id, 'status': 'processing'}), 202
+
+    if job.get('status') == 'failed':
+        return jsonify({'job_id': job_id, 'status': 'failed', 'error': job.get('error', 'Error desconocido')}), 500
+
+    result = job.get('result', {})
+    return jsonify({'job_id': job_id, 'status': 'done', **result}), 200
 
 
 @app.route('/audio', methods=['POST'])
