@@ -21,6 +21,36 @@ const TRANSCRIBE_TIMEOUT_MS = (() => {
   return Number.isFinite(value) && value > 0 ? value : 600000
 })()
 
+async function pollTranscribeJob(
+  backendUrl: string,
+  backendKey: string,
+  jobId: string
+): Promise<Record<string, unknown>> {
+  const startedAt = Date.now()
+
+  while (Date.now() - startedAt < TRANSCRIBE_TIMEOUT_MS) {
+    const statusRes = await fetch(`${backendUrl}/transcribe/status/${jobId}`, {
+      method: 'GET',
+      headers: {
+        ...(backendKey ? { 'x-api-key': backendKey } : {}),
+      },
+      signal: AbortSignal.timeout(60000),
+    })
+
+    const statusData = await statusRes.json()
+    if (statusRes.status === 200 && statusData.status === 'done') {
+      return statusData
+    }
+    if (statusRes.status >= 400) {
+      throw new Error(statusData.error || 'La transcripción falló')
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 2000))
+  }
+
+  throw new Error('La transcripción tardó demasiado tiempo en completarse.')
+}
+
 export async function POST(req: NextRequest) {
   let body: { url?: string; start?: number; end?: number }
   try {
@@ -82,6 +112,14 @@ export async function POST(req: NextRequest) {
         signal: AbortSignal.timeout(TRANSCRIBE_TIMEOUT_MS),
       })
       const parsed = await res.json()
+      if (res.status === 202 && parsed.job_id) {
+        const finished = await pollTranscribeJob(
+          backendUrl,
+          backendKey,
+          parsed.job_id
+        )
+        return NextResponse.json(finished)
+      }
       if (!parsed.success)
         return NextResponse.json({ error: parsed.error }, { status: 500 })
       return NextResponse.json(parsed)

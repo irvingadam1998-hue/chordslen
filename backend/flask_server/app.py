@@ -16,6 +16,7 @@ import sys
 import os
 import time
 import threading
+import uuid
 
 from flask import Flask, request, jsonify
 
@@ -37,6 +38,9 @@ RATE_LIMIT_SECONDS = 5
 # In-memory rate limiter: {ip: last_request_timestamp}
 _rate_lock = threading.Lock()
 _ip_last = {}
+
+_jobs = {}
+_jobs_lock = threading.Lock()
 
 
 def _get_ip():
@@ -74,6 +78,22 @@ def health():
     return jsonify({'ok': True})
 
 
+def _run_analysis_job(job_id: str, url: str):
+    try:
+        result = analyze_url(url)
+        with _jobs_lock:
+            _jobs[job_id] = {
+                'status': 'done',
+                'result': result,
+            }
+    except Exception as e:
+        with _jobs_lock:
+            _jobs[job_id] = {
+                'status': 'failed',
+                'error': str(e),
+            }
+
+
 @app.route('/analyze', methods=['POST'])
 def analyze():
     auth_error = _check_auth()
@@ -86,7 +106,6 @@ def analyze():
     if not url:
         return jsonify({'success': False, 'error': 'URL requerida'}), 400
 
-    # Validate YouTube URL
     try:
         from urllib.parse import urlparse
         parsed = urlparse(url)
@@ -95,12 +114,50 @@ def analyze():
     except Exception:
         return jsonify({'success': False, 'error': 'URL inválida'}), 400
 
+    job_id = uuid.uuid4().hex
+    with _jobs_lock:
+        _jobs[job_id] = {'status': 'processing'}
+
+    threading.Thread(target=_run_analysis_job, args=(job_id, url), daemon=True).start()
+    return jsonify({'job_id': job_id, 'status': 'processing'}), 202
+
+
+@app.route('/status/<job_id>', methods=['GET'])
+def analyze_status(job_id: str):
+    auth_error = _check_auth()
+    if auth_error:
+        return auth_error
+
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+
+    if not job:
+        return jsonify({'success': False, 'error': 'Job no encontrado'}), 404
+
+    if job.get('status') == 'processing':
+        return jsonify({'job_id': job_id, 'status': 'processing'}), 202
+
+    if job.get('status') == 'failed':
+        return jsonify({'job_id': job_id, 'status': 'failed', 'error': job.get('error', 'Error desconocido')}), 500
+
+    result = job.get('result', {})
+    return jsonify({'job_id': job_id, 'status': 'done', **result}), 200
+
+
+def _run_transcription_job(job_id: str, url: str, start: float, end: float):
     try:
-        result = analyze_url(url)
-        status = 200 if result.get('success') else 500
-        return jsonify(result), status
+        result = transcribe(url, float(start), float(end))
+        with _jobs_lock:
+            _jobs[job_id] = {
+                'status': 'done',
+                'result': result,
+            }
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+        with _jobs_lock:
+            _jobs[job_id] = {
+                'status': 'failed',
+                'error': str(e),
+            }
 
 
 @app.route('/transcribe', methods=['POST'])
@@ -123,12 +180,34 @@ def transcribe_route():
     if end - start > 60:
         return jsonify({'success': False, 'error': 'Máximo 60 segundos por transcripción'}), 400
 
-    try:
-        result = transcribe(url, float(start), float(end))
-        status = 200 if result.get('success') else 500
-        return jsonify(result), status
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)}), 500
+    job_id = uuid.uuid4().hex
+    with _jobs_lock:
+        _jobs[job_id] = {'status': 'processing'}
+
+    threading.Thread(target=_run_transcription_job, args=(job_id, url, float(start), float(end)), daemon=True).start()
+    return jsonify({'job_id': job_id, 'status': 'processing'}), 202
+
+
+@app.route('/transcribe/status/<job_id>', methods=['GET'])
+def transcribe_status(job_id: str):
+    auth_error = _check_auth()
+    if auth_error:
+        return auth_error
+
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+
+    if not job:
+        return jsonify({'success': False, 'error': 'Job no encontrado'}), 404
+
+    if job.get('status') == 'processing':
+        return jsonify({'job_id': job_id, 'status': 'processing'}), 202
+
+    if job.get('status') == 'failed':
+        return jsonify({'job_id': job_id, 'status': 'failed', 'error': job.get('error', 'Error desconocido')}), 500
+
+    result = job.get('result', {})
+    return jsonify({'job_id': job_id, 'status': 'done', **result}), 200
 
 
 if __name__ == '__main__':

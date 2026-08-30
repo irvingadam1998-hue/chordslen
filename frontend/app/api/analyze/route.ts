@@ -42,6 +42,36 @@ const ANALYZE_TIMEOUT_MS = (() => {
   return Number.isFinite(value) && value > 0 ? value : 600000
 })()
 
+async function pollAnalysisJob(
+  backendUrl: string,
+  backendKey: string,
+  jobId: string
+): Promise<Record<string, unknown>> {
+  const startedAt = Date.now()
+
+  while (Date.now() - startedAt < ANALYZE_TIMEOUT_MS) {
+    const statusRes = await fetch(`${backendUrl}/status/${jobId}`, {
+      method: 'GET',
+      headers: {
+        ...(backendKey ? { 'x-api-key': backendKey } : {}),
+      },
+      signal: AbortSignal.timeout(60000),
+    })
+
+    const statusData = await statusRes.json()
+    if (statusRes.status === 200 && statusData.status === 'done') {
+      return statusData
+    }
+    if (statusRes.status >= 400) {
+      throw new Error(statusData.error || 'El análisis falló')
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 2000))
+  }
+
+  throw new Error('El análisis tardó demasiado tiempo en completarse.')
+}
+
 export async function POST(req: NextRequest) {
   // ── API key check ──────────────────────────────────────────────────────────
   const requiredKey = process.env.API_KEY
@@ -117,7 +147,18 @@ export async function POST(req: NextRequest) {
         body: JSON.stringify({ url }),
         signal: AbortSignal.timeout(ANALYZE_TIMEOUT_MS),
       })
+
       const parsed = await res.json()
+
+      if (res.status === 202 && parsed.job_id) {
+        const finished = await pollAnalysisJob(
+          backendUrl,
+          backendKey,
+          parsed.job_id
+        )
+        return NextResponse.json(finished)
+      }
+
       if (!parsed.success) {
         return NextResponse.json({ error: parsed.error }, { status: 500 })
       }
