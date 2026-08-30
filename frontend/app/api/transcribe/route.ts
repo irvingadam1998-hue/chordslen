@@ -16,6 +16,11 @@ function isYouTubeUrl(url: string): boolean {
   }
 }
 
+const TRANSCRIBE_TIMEOUT_MS = (() => {
+  const value = Number(process.env.TRANSCRIBE_TIMEOUT_MS || 600000)
+  return Number.isFinite(value) && value > 0 ? value : 600000
+})()
+
 export async function POST(req: NextRequest) {
   let body: { url?: string; start?: number; end?: number }
   try {
@@ -74,7 +79,7 @@ export async function POST(req: NextRequest) {
           ...(backendKey ? { 'x-api-key': backendKey } : {}),
         },
         body: JSON.stringify({ url, start, end }),
-        signal: AbortSignal.timeout(180000),
+        signal: AbortSignal.timeout(TRANSCRIBE_TIMEOUT_MS),
       })
       const parsed = await res.json()
       if (!parsed.success)
@@ -97,8 +102,12 @@ export async function POST(req: NextRequest) {
   const result = await new Promise<string>((resolve, reject) => {
     const timeout = setTimeout(() => {
       child.kill()
-      reject(new Error('Timeout: la transcripción tardó más de 3 minutos.'))
-    }, 180000)
+      reject(
+        new Error(
+          `Timeout: la transcripción tardó más de ${Math.round(TRANSCRIBE_TIMEOUT_MS / 60000)} minutos.`
+        )
+      )
+    }, TRANSCRIBE_TIMEOUT_MS)
     const child = spawn(
       pythonCmd,
       [scriptPath, url, String(start), String(end)],

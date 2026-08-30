@@ -37,6 +37,11 @@ function isYouTubeUrl(url: string): boolean {
   }
 }
 
+const ANALYZE_TIMEOUT_MS = (() => {
+  const value = Number(process.env.ANALYZE_TIMEOUT_MS || 600000)
+  return Number.isFinite(value) && value > 0 ? value : 600000
+})()
+
 export async function POST(req: NextRequest) {
   // ── API key check ──────────────────────────────────────────────────────────
   const requiredKey = process.env.API_KEY
@@ -110,7 +115,7 @@ export async function POST(req: NextRequest) {
           ...(backendKey ? { 'x-api-key': backendKey } : {}),
         },
         body: JSON.stringify({ url }),
-        signal: AbortSignal.timeout(300000),
+        signal: AbortSignal.timeout(ANALYZE_TIMEOUT_MS),
       })
       const parsed = await res.json()
       if (!parsed.success) {
@@ -134,10 +139,10 @@ export async function POST(req: NextRequest) {
       child.kill()
       reject(
         new Error(
-          'Timeout: el análisis tardó más de 5 minutos. Intenta con una canción más corta.'
+          `Timeout: el análisis tardó más de ${Math.round(ANALYZE_TIMEOUT_MS / 60000)} minutos. Intenta con una canción más corta.`
         )
       )
-    }, 300000)
+    }, ANALYZE_TIMEOUT_MS)
 
     const pythonCmd =
       process.platform === 'win32'
