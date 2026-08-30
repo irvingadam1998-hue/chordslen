@@ -47,7 +47,9 @@ export async function POST(req: NextRequest) {
 
   // ── Python local ──────────────────────────────────────────────────────────
   const scriptPath = path.join(process.cwd(), 'scripts', 'transcribe.py')
-  const pythonCmd = process.platform === 'win32' ? 'python' : 'python3'
+  const pythonCmd = process.platform === 'win32'
+    ? 'python'
+    : path.join(process.cwd(), '.venv', 'bin', 'python')
 
   const result = await new Promise<string>((resolve, reject) => {
     const timeout = setTimeout(() => { child.kill(); reject(new Error('Timeout: la transcripción tardó más de 3 minutos.')) }, 180000)

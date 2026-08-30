@@ -1,0 +1,32 @@
+services:
+  extractor:
+    build:
+      context: ./backend/extractor_server
+      dockerfile: Dockerfile
+    container_name: chordlens-extractor
+    restart: unless-stopped
+    ports:
+      - "5002:5002"
+    environment:
+      PORT: "5002"
+      API_KEY: "secret123"
+      YTDLP_PLAYER_CLIENTS: "android,ios,tv_embedded"
+      # Si quieres usar cookies reales en el extractor, puedes dejar una ruta local
+      # YOUTUBE_COOKIES_FILE: "/app/cookies.txt"
+    volumes:
+      - ./backend/extractor_server:/app
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: chordlens-web
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: "production"
+      REMOTE_EXTRACTOR_URL: "http://extractor:5002"
+      REMOTE_EXTRACTOR_TOKEN: "secret123"
+    depends_on:
+      - extractor

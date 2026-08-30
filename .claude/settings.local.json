@@ -10,7 +10,19 @@
       "Bash(pip index:*)",
       "Bash(pip install:*)",
       "Bash(ffmpeg -version)",
-      "Bash(yt-dlp --version)"
+      "Bash(yt-dlp --version)",
+      "Bash(.venv/bin/pip list *)",
+      "Bash(.venv/bin/pip install *)",
+      "Read(//usr/bin/**)",
+      "Read(//usr/local/bin/**)",
+      "Bash(pacman -Q python)",
+      "Bash(pacman -Q python3)",
+      "Bash(rm -rf .venv)",
+      "Bash(python3 -m venv .venv)",
+      "Bash(.venv/bin/python *)",
+      "Bash(npm uninstall *)",
+      "Bash(node -e \"require\\('./tailwind.config.js'\\)\")",
+      "Bash(node -e \"const tw = require\\('tailwindcss'\\); console.log\\('tailwindcss version:', require\\('./node_modules/tailwindcss/package.json'\\).version\\)\")"
     ]
   }
 }

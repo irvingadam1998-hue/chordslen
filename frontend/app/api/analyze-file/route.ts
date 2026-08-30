@@ -37,7 +37,9 @@ export async function POST(req: NextRequest) {
         reject(new Error('Timeout: el análisis tardó más de 5 minutos. Intentá con una canción más corta.'))
       }, 300000)
 
-      const pythonCmd = process.platform === 'win32' ? 'python' : 'python3'
+      const pythonCmd = process.platform === 'win32'
+        ? 'python'
+        : path.join(process.cwd(), '.venv', 'bin', 'python')
       const child = spawn(pythonCmd, [scriptPath, '--file', tmpPath], {
         stdio: ['ignore', 'pipe', 'pipe'],
       })
