@@ -34,6 +34,7 @@ _lock = threading.Lock()
 _jobs: dict[str, dict[str, object]] = {}
 _jobs_lock = threading.Lock()
 JOB_TTL_SECONDS = int(os.environ.get('JOB_TTL_SECONDS', '300'))
+MAX_CONCURRENT_JOBS = int(os.environ.get('MAX_CONCURRENT_JOBS', '1'))
 
 
 def _check_auth():
@@ -215,6 +216,16 @@ def _cleanup_jobs():
             _jobs.pop(job_id, None)
 
 
+def _count_active_jobs():
+    with _jobs_lock:
+        return sum(1 for job in _jobs.values() if job.get('status') == 'processing')
+
+
+def _delete_job(job_id: str):
+    with _jobs_lock:
+        _jobs.pop(job_id, None)
+
+
 def _run_analysis_job(job_id: str, url: str):
     try:
         result = analyze_url(url)
@@ -270,6 +281,12 @@ def analyze():
     if analyze_url is None:
         return jsonify({'success': False, 'error': 'Módulo de análisis no disponible'}), 500
 
+    if _count_active_jobs() >= MAX_CONCURRENT_JOBS:
+        return jsonify({
+            'success': False,
+            'error': f'Hay un análisis en curso. Espera a que termine antes de enviar otro. (máximo {MAX_CONCURRENT_JOBS})',
+        }), 429
+
     job_id = uuid.uuid4().hex
     with _jobs_lock:
         _jobs[job_id] = {'status': 'processing', 'stored_at': time.time()}
@@ -295,9 +312,11 @@ def analyze_status(job_id: str):
         return jsonify({'job_id': job_id, 'status': 'processing'}), 202
 
     if job.get('status') == 'failed':
+        _delete_job(job_id)
         return jsonify({'job_id': job_id, 'status': 'failed', 'error': job.get('error', 'Error desconocido')}), 500
 
     result = job.get('result', {})
+    _delete_job(job_id)
     return jsonify({'job_id': job_id, 'status': 'done', **result}), 200
 
 
@@ -323,6 +342,12 @@ def transcribe_route():
 
     if transcribe_fragment is None:
         return jsonify({'success': False, 'error': 'Módulo de transcripción no disponible'}), 500
+
+    if _count_active_jobs() >= MAX_CONCURRENT_JOBS:
+        return jsonify({
+            'success': False,
+            'error': f'Hay una transcripción en curso. Espera a que termine antes de enviar otra. (máximo {MAX_CONCURRENT_JOBS})',
+        }), 429
 
     job_id = uuid.uuid4().hex
     with _jobs_lock:
@@ -353,9 +378,11 @@ def transcribe_status(job_id: str):
         return jsonify({'job_id': job_id, 'status': 'processing'}), 202
 
     if job.get('status') == 'failed':
+        _delete_job(job_id)
         return jsonify({'job_id': job_id, 'status': 'failed', 'error': job.get('error', 'Error desconocido')}), 500
 
     result = job.get('result', {})
+    _delete_job(job_id)
     return jsonify({'job_id': job_id, 'status': 'done', **result}), 200
 
 
