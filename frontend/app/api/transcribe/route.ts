@@ -21,36 +21,6 @@ const TRANSCRIBE_TIMEOUT_MS = (() => {
   return Number.isFinite(value) && value > 0 ? value : 600000
 })()
 
-async function pollTranscribeJob(
-  backendUrl: string,
-  backendKey: string,
-  jobId: string
-): Promise<Record<string, unknown>> {
-  const startedAt = Date.now()
-
-  while (Date.now() - startedAt < TRANSCRIBE_TIMEOUT_MS) {
-    const statusRes = await fetch(`${backendUrl}/transcribe/status/${jobId}`, {
-      method: 'GET',
-      headers: {
-        ...(backendKey ? { 'x-api-key': backendKey } : {}),
-      },
-      signal: AbortSignal.timeout(60000),
-    })
-
-    const statusData = await statusRes.json()
-    if (statusRes.status === 200 && statusData.status === 'done') {
-      return statusData
-    }
-    if (statusRes.status >= 400) {
-      throw new Error(statusData.error || 'La transcripción falló')
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, 2000))
-  }
-
-  throw new Error('La transcripción tardó demasiado tiempo en completarse.')
-}
-
 export async function POST(req: NextRequest) {
   let body: { url?: string; start?: number; end?: number }
   try {
@@ -84,7 +54,6 @@ export async function POST(req: NextRequest) {
       { status: 400 }
     )
 
-  // ── Ruta fija temporal al backend de producción ───────────────────────
   const FALLBACK_BACKEND_URL = 'https://chordslen-production.up.railway.app'
   const FALLBACK_BACKEND_KEY = '7f9a8d2c1b4e5f6a8c9d0e1f2a3b4c5d'
 
@@ -109,19 +78,24 @@ export async function POST(req: NextRequest) {
           ...(backendKey ? { 'x-api-key': backendKey } : {}),
         },
         body: JSON.stringify({ url, start, end }),
-        signal: AbortSignal.timeout(TRANSCRIBE_TIMEOUT_MS),
+        signal: AbortSignal.timeout(30000),
       })
+
       const parsed = await res.json()
       if (res.status === 202 && parsed.job_id) {
-        const finished = await pollTranscribeJob(
-          backendUrl,
-          backendKey,
-          parsed.job_id
+        return NextResponse.json(
+          { jobId: parsed.job_id, status: 'processing' },
+          { status: 202 }
         )
-        return NextResponse.json(finished)
       }
-      if (!parsed.success)
-        return NextResponse.json({ error: parsed.error }, { status: 500 })
+
+      if (parsed?.success === false || parsed?.error) {
+        return NextResponse.json(
+          { error: parsed.error || 'La transcripción falló' },
+          { status: res.status || 500 }
+        )
+      }
+
       return NextResponse.json(parsed)
     } catch (err) {
       const msg =
@@ -130,7 +104,6 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // ── Python local ──────────────────────────────────────────────────────────
   const scriptPath = path.join(process.cwd(), 'scripts', 'transcribe.py')
   const pythonCmd =
     process.platform === 'win32'
@@ -146,6 +119,7 @@ export async function POST(req: NextRequest) {
         )
       )
     }, TRANSCRIBE_TIMEOUT_MS)
+
     const child = spawn(
       pythonCmd,
       [scriptPath, url, String(start), String(end)],

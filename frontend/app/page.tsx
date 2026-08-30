@@ -65,6 +65,29 @@ export default function Home() {
   const videoId = analyzedUrl ? extractVideoId(analyzedUrl) : null
   const hasLyrics = !!(result?.artist && result?.title)
 
+  const waitForJobResult = async (endpoint: string) => {
+    const startedAt = Date.now()
+    while (Date.now() - startedAt < 10 * 60 * 1000) {
+      const res = await fetch(endpoint)
+      const data = await res.json()
+
+      if (!res.ok) {
+        throw new Error(
+          data.error || 'Error al consultar el estado del trabajo'
+        )
+      }
+
+      if (data.status === 'done') return data
+      if (data.status === 'failed') {
+        throw new Error(data.error || 'El trabajo falló')
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 2000))
+    }
+
+    throw new Error('El trabajo tardó demasiado tiempo en completarse.')
+  }
+
   const handleAnalyze = async () => {
     if (!url.trim()) return
     setError(null)
@@ -87,6 +110,30 @@ export default function Home() {
       clearTimeout(t2)
       clearTimeout(t3)
       const data = await res.json()
+
+      if (res.status === 202 && data.jobId) {
+        const finished = await waitForJobResult(
+          `/api/analyze/status/${data.jobId}`
+        )
+
+        if (
+          !finished ||
+          typeof finished !== 'object' ||
+          !Array.isArray(finished.chords_timeline)
+        ) {
+          setError(
+            'El backend no devolvió un análisis válido de acordes. Revisa la ruta del servicio remoto.'
+          )
+          setStep(null)
+          return
+        }
+
+        setResult(finished)
+        setAnalyzedUrl(url)
+        setStep(null)
+        return
+      }
+
       if (!res.ok || data.error) {
         setError(data.error || 'Error desconocido')
         setStep(null)
@@ -191,6 +238,13 @@ export default function Home() {
         body: JSON.stringify({ url: analyzedUrl, start, end }),
       })
       const data = await res.json()
+      if (res.status === 202 && data.jobId) {
+        const finished = await waitForJobResult(
+          `/api/transcribe/status/${data.jobId}`
+        )
+        setTranscription(finished)
+        return
+      }
       if (!res.ok || data.error) {
         setTranscribeError(data.error || 'Error desconocido')
         return

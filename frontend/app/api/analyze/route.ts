@@ -22,7 +22,6 @@ function isRateLimited(ip: string): boolean {
   return false
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
 function isYouTubeUrl(url: string): boolean {
   try {
     const parsed = new URL(url)
@@ -42,38 +41,7 @@ const ANALYZE_TIMEOUT_MS = (() => {
   return Number.isFinite(value) && value > 0 ? value : 600000
 })()
 
-async function pollAnalysisJob(
-  backendUrl: string,
-  backendKey: string,
-  jobId: string
-): Promise<Record<string, unknown>> {
-  const startedAt = Date.now()
-
-  while (Date.now() - startedAt < ANALYZE_TIMEOUT_MS) {
-    const statusRes = await fetch(`${backendUrl}/status/${jobId}`, {
-      method: 'GET',
-      headers: {
-        ...(backendKey ? { 'x-api-key': backendKey } : {}),
-      },
-      signal: AbortSignal.timeout(60000),
-    })
-
-    const statusData = await statusRes.json()
-    if (statusRes.status === 200 && statusData.status === 'done') {
-      return statusData
-    }
-    if (statusRes.status >= 400) {
-      throw new Error(statusData.error || 'El análisis falló')
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, 2000))
-  }
-
-  throw new Error('El análisis tardó demasiado tiempo en completarse.')
-}
-
 export async function POST(req: NextRequest) {
-  // ── API key check ──────────────────────────────────────────────────────────
   const requiredKey = process.env.API_KEY
   if (requiredKey) {
     const providedKey = req.headers.get('x-api-key')
@@ -85,7 +53,6 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // ── Rate limit ─────────────────────────────────────────────────────────────
   const ip = getClientIp(req)
   if (isRateLimited(ip)) {
     return NextResponse.json(
@@ -108,7 +75,6 @@ export async function POST(req: NextRequest) {
   }
 
   const { url } = body
-
   if (!url || typeof url !== 'string') {
     return NextResponse.json({ error: 'URL requerida' }, { status: 400 })
   }
@@ -120,7 +86,6 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  // ── Ruta fija temporal al backend de producción ───────────────────────
   const FALLBACK_BACKEND_URL = 'https://chordslen-production.up.railway.app'
   const FALLBACK_BACKEND_KEY = '7f9a8d2c1b4e5f6a8c9d0e1f2a3b4c5d'
 
@@ -145,23 +110,25 @@ export async function POST(req: NextRequest) {
           ...(backendKey ? { 'x-api-key': backendKey } : {}),
         },
         body: JSON.stringify({ url }),
-        signal: AbortSignal.timeout(ANALYZE_TIMEOUT_MS),
+        signal: AbortSignal.timeout(30000),
       })
 
       const parsed = await res.json()
 
       if (res.status === 202 && parsed.job_id) {
-        const finished = await pollAnalysisJob(
-          backendUrl,
-          backendKey,
-          parsed.job_id
+        return NextResponse.json(
+          { jobId: parsed.job_id, status: 'processing' },
+          { status: 202 }
         )
-        return NextResponse.json(finished)
       }
 
-      if (!parsed.success) {
-        return NextResponse.json({ error: parsed.error }, { status: 500 })
+      if (parsed?.success === false || parsed?.error) {
+        return NextResponse.json(
+          { error: parsed.error || 'El análisis falló' },
+          { status: res.status || 500 }
+        )
       }
+
       return NextResponse.json(parsed)
     } catch (err) {
       const msg =
@@ -172,8 +139,11 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // ── Local Python fallback ─────────────────────────────────────────────────
   const scriptPath = path.join(process.cwd(), 'scripts', 'analyze.py')
+  const pythonCmd =
+    process.platform === 'win32'
+      ? 'python'
+      : path.join(process.cwd(), '.venv', 'bin', 'python')
 
   const result = await new Promise<string>((resolve, reject) => {
     const timeout = setTimeout(() => {
@@ -185,10 +155,6 @@ export async function POST(req: NextRequest) {
       )
     }, ANALYZE_TIMEOUT_MS)
 
-    const pythonCmd =
-      process.platform === 'win32'
-        ? 'python'
-        : path.join(process.cwd(), '.venv', 'bin', 'python')
     const child = spawn(pythonCmd, [scriptPath, url], {
       stdio: ['ignore', 'pipe', 'pipe'],
     })

@@ -26,7 +26,7 @@ app = Flask(__name__)
 
 API_KEY = os.environ.get('API_KEY', '').strip()
 TMP_ROOT = Path(os.environ.get('EXTRACTOR_TMP_DIR', tempfile.gettempdir())) / 'chordlens-extractor'
-TTL_SECONDS = int(os.environ.get('EXTRACTOR_FILE_TTL_SECONDS', '900'))
+TTL_SECONDS = int(os.environ.get('EXTRACTOR_FILE_TTL_SECONDS', '60'))
 TMP_ROOT.mkdir(parents=True, exist_ok=True)
 
 _file_index: dict[str, dict[str, object]] = {}
@@ -157,6 +157,17 @@ def _download_audio(url: str, start: float | None = None, end: float | None = No
 
 
 def _register_file(path: Path):
+    if TTL_SECONDS <= 0:
+        try:
+            if path.is_file():
+                path.unlink()
+            parent = path.parent
+            if parent.exists() and not any(parent.iterdir()):
+                parent.rmdir()
+        except Exception:
+            pass
+        return None
+
     file_id = uuid.uuid4().hex
     with _lock:
         _file_index[file_id] = {

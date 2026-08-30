@@ -41,6 +41,27 @@ _ip_last = {}
 
 _jobs = {}
 _jobs_lock = threading.Lock()
+JOB_TTL_SECONDS = int(os.environ.get('JOB_TTL_SECONDS', '300'))
+
+
+def _cleanup_jobs():
+    now = time.time()
+    with _jobs_lock:
+        expired = []
+        for job_id, job in list(_jobs.items()):
+            if 'stored_at' in job:
+                if now - float(job['stored_at']) > JOB_TTL_SECONDS:
+                    expired.append(job_id)
+            elif job.get('status') == 'failed':
+                expired.append(job_id)
+        for job_id in expired:
+            _jobs.pop(job_id, None)
+
+
+def _cleanup_loop():
+    while True:
+        _cleanup_jobs()
+        time.sleep(30)
 
 
 def _get_ip():
@@ -85,6 +106,7 @@ def _run_analysis_job(job_id: str, url: str):
             _jobs[job_id] = {
                 'status': 'done',
                 'result': result,
+                'stored_at': time.time(),
             }
     except Exception as e:
         with _jobs_lock:
@@ -128,6 +150,8 @@ def analyze_status(job_id: str):
     if auth_error:
         return auth_error
 
+    _cleanup_jobs()
+
     with _jobs_lock:
         job = _jobs.get(job_id)
 
@@ -151,6 +175,7 @@ def _run_transcription_job(job_id: str, url: str, start: float, end: float):
             _jobs[job_id] = {
                 'status': 'done',
                 'result': result,
+                'stored_at': time.time(),
             }
     except Exception as e:
         with _jobs_lock:
@@ -194,6 +219,8 @@ def transcribe_status(job_id: str):
     if auth_error:
         return auth_error
 
+    _cleanup_jobs()
+
     with _jobs_lock:
         job = _jobs.get(job_id)
 
@@ -211,6 +238,7 @@ def transcribe_status(job_id: str):
 
 
 if __name__ == '__main__':
+    threading.Thread(target=_cleanup_loop, daemon=True).start()
     port = int(os.environ.get('PORT', 5001))
     print(f'[ChordLens Flask] starting on port {port}')
     print(f'[ChordLens Flask] API key: {"set" if API_KEY else "NOT SET (open access)"}')
