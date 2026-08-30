@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 import atexit
 import base64
+import json
 import os
 import shutil
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -35,6 +37,29 @@ _jobs: dict[str, dict[str, object]] = {}
 _jobs_lock = threading.Lock()
 JOB_TTL_SECONDS = int(os.environ.get('JOB_TTL_SECONDS', '300'))
 MAX_CONCURRENT_JOBS = int(os.environ.get('MAX_CONCURRENT_JOBS', '1'))
+JOBS_DB_PATH = TMP_ROOT / 'jobs.sqlite3'
+
+
+def _init_jobs_db():
+    with sqlite3.connect(JOBS_DB_PATH) as conn:
+        conn.execute(
+            '''
+            CREATE TABLE IF NOT EXISTS jobs (
+                job_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                result TEXT,
+                error TEXT,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            )
+            '''
+        )
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status)')
+        conn.execute('CREATE INDEX IF NOT EXISTS idx_jobs_updated_at ON jobs(updated_at)')
+        conn.commit()
+
+
+_init_jobs_db()
 
 
 def _check_auth():
@@ -206,60 +231,91 @@ def _cleanup_loop():
 
 def _cleanup_jobs():
     now = time.time()
-    expired = []
-    with _jobs_lock:
-        for job_id, job in list(_jobs.items()):
-            stored_at = float(job.get('stored_at', 0))
-            if now - stored_at > JOB_TTL_SECONDS:
-                expired.append(job_id)
-        for job_id in expired:
-            _jobs.pop(job_id, None)
+    with sqlite3.connect(JOBS_DB_PATH) as conn:
+        conn.execute(
+            'DELETE FROM jobs WHERE updated_at < ? AND status != ?',
+            (now - JOB_TTL_SECONDS, 'processing'),
+        )
+        conn.commit()
 
 
 def _count_active_jobs():
-    with _jobs_lock:
-        return sum(1 for job in _jobs.values() if job.get('status') == 'processing')
+    with sqlite3.connect(JOBS_DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS c FROM jobs WHERE status = 'processing'"
+        ).fetchone()
+        return int(row[0] or 0)
 
 
 def _delete_job(job_id: str):
-    with _jobs_lock:
-        _jobs.pop(job_id, None)
+    with sqlite3.connect(JOBS_DB_PATH) as conn:
+        conn.execute('DELETE FROM jobs WHERE job_id = ?', (job_id,))
+        conn.commit()
+
+
+def _create_job(job_id: str):
+    now = time.time()
+    with sqlite3.connect(JOBS_DB_PATH) as conn:
+        conn.execute(
+            'INSERT OR REPLACE INTO jobs(job_id, status, result, error, created_at, updated_at) VALUES (?, ?, NULL, NULL, ?, ?)',
+            (job_id, 'processing', now, now),
+        )
+        conn.commit()
+
+
+def _set_job_done(job_id: str, result: dict):
+    now = time.time()
+    with sqlite3.connect(JOBS_DB_PATH) as conn:
+        conn.execute(
+            'UPDATE jobs SET status = ?, result = ?, error = NULL, updated_at = ? WHERE job_id = ?',
+            ('done', json.dumps(result, ensure_ascii=False), now, job_id),
+        )
+        conn.commit()
+
+
+def _set_job_failed(job_id: str, error: str):
+    now = time.time()
+    with sqlite3.connect(JOBS_DB_PATH) as conn:
+        conn.execute(
+            'UPDATE jobs SET status = ?, error = ?, result = NULL, updated_at = ? WHERE job_id = ?',
+            ('failed', error, now, job_id),
+        )
+        conn.commit()
+
+
+def _get_job(job_id: str):
+    with sqlite3.connect(JOBS_DB_PATH) as conn:
+        row = conn.execute(
+            'SELECT job_id, status, result, error, created_at, updated_at FROM jobs WHERE job_id = ?',
+            (job_id,),
+        ).fetchone()
+    if not row:
+        return None
+    payload = {
+        'job_id': row[0],
+        'status': row[1],
+        'result': json.loads(row[2]) if row[2] else None,
+        'error': row[3],
+        'created_at': row[4],
+        'updated_at': row[5],
+    }
+    return payload
 
 
 def _run_analysis_job(job_id: str, url: str):
     try:
         result = analyze_url(url)
-        with _jobs_lock:
-            _jobs[job_id] = {
-                'status': 'done',
-                'result': result,
-                'stored_at': time.time(),
-            }
+        _set_job_done(job_id, result)
     except Exception as exc:
-        with _jobs_lock:
-            _jobs[job_id] = {
-                'status': 'failed',
-                'error': str(exc),
-                'stored_at': time.time(),
-            }
+        _set_job_failed(job_id, str(exc))
 
 
 def _run_transcribe_job(job_id: str, url: str, start: float, end: float):
     try:
         result = transcribe_fragment(url, start, end)
-        with _jobs_lock:
-            _jobs[job_id] = {
-                'status': 'done',
-                'result': result,
-                'stored_at': time.time(),
-            }
+        _set_job_done(job_id, result)
     except Exception as exc:
-        with _jobs_lock:
-            _jobs[job_id] = {
-                'status': 'failed',
-                'error': str(exc),
-                'stored_at': time.time(),
-            }
+        _set_job_failed(job_id, str(exc))
 
 
 @app.route('/health', methods=['GET'])
@@ -288,8 +344,7 @@ def analyze():
         }), 429
 
     job_id = uuid.uuid4().hex
-    with _jobs_lock:
-        _jobs[job_id] = {'status': 'processing', 'stored_at': time.time()}
+    _create_job(job_id)
 
     threading.Thread(target=_run_analysis_job, args=(job_id, url), daemon=True).start()
     return jsonify({'job_id': job_id, 'status': 'processing'}), 202
@@ -302,8 +357,7 @@ def analyze_status(job_id: str):
         return auth
 
     _cleanup_jobs()
-    with _jobs_lock:
-        job = _jobs.get(job_id)
+    job = _get_job(job_id)
 
     if not job:
         return jsonify({'success': False, 'error': 'Job no encontrado'}), 404
@@ -315,7 +369,7 @@ def analyze_status(job_id: str):
         _delete_job(job_id)
         return jsonify({'job_id': job_id, 'status': 'failed', 'error': job.get('error', 'Error desconocido')}), 500
 
-    result = job.get('result', {})
+    result = job.get('result', {}) or {}
     _delete_job(job_id)
     return jsonify({'job_id': job_id, 'status': 'done', **result}), 200
 
@@ -350,8 +404,7 @@ def transcribe_route():
         }), 429
 
     job_id = uuid.uuid4().hex
-    with _jobs_lock:
-        _jobs[job_id] = {'status': 'processing', 'stored_at': time.time()}
+    _create_job(job_id)
 
     threading.Thread(
         target=_run_transcribe_job,
@@ -368,8 +421,7 @@ def transcribe_status(job_id: str):
         return auth
 
     _cleanup_jobs()
-    with _jobs_lock:
-        job = _jobs.get(job_id)
+    job = _get_job(job_id)
 
     if not job:
         return jsonify({'success': False, 'error': 'Job no encontrado'}), 404
@@ -381,7 +433,7 @@ def transcribe_status(job_id: str):
         _delete_job(job_id)
         return jsonify({'job_id': job_id, 'status': 'failed', 'error': job.get('error', 'Error desconocido')}), 500
 
-    result = job.get('result', {})
+    result = job.get('result', {}) or {}
     _delete_job(job_id)
     return jsonify({'job_id': job_id, 'status': 'done', **result}), 200
 
