@@ -4,7 +4,10 @@ import json
 import os
 import tempfile
 import shutil
+import subprocess
+import time
 import urllib.request
+import urllib.parse
 import base64
 
 NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
@@ -308,6 +311,120 @@ def _remote_extractor_headers():
         headers['Authorization'] = f'Bearer {token}'
         headers['x-api-key'] = token
     return headers
+
+
+def _playwright_proxy_settings():
+    """Return a Playwright proxy dict, or None if not configured."""
+    proxy_url = os.environ.get('RESIDENTIAL_PROXY', '').strip()
+    if not proxy_url:
+        return None
+
+    parsed = urllib.parse.urlparse(proxy_url)
+    if not parsed.scheme or not parsed.hostname:
+        return None
+
+    server = f'{parsed.scheme}://{parsed.hostname}:{parsed.port or 80}'
+    proxy = {'server': server}
+    if parsed.username:
+        proxy['username'] = parsed.username
+    if parsed.password:
+        proxy['password'] = parsed.password
+    return proxy
+
+
+def _looks_like_googlevideo_audio_url(url):
+    """Match direct YouTube audio streams served from googlevideo.com."""
+    if not url:
+        return False
+    lower = url.lower()
+    return 'googlevideo.com/videoplayback' in lower and 'mime=audio' in lower
+
+
+def _playwright_download_audio(url, tmpdir):
+    """Open the video in headless Chromium and intercept the direct audio stream."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception as e:
+        sys.stderr.write(f'[playwright] Playwright not available: {e}\n')
+        return None
+
+    ffmpeg_path = shutil.which('ffmpeg')
+    if not ffmpeg_path:
+        sys.stderr.write('[playwright] ffmpeg not found, skipping browser fallback\n')
+        return None
+
+    audio_url = None
+    proxy_cfg = _playwright_proxy_settings()
+    start_ts = time.monotonic()
+
+    try:
+        with sync_playwright() as p:
+            launch_kwargs = {'headless': True}
+            if proxy_cfg:
+                launch_kwargs['proxy'] = proxy_cfg
+                sys.stderr.write(f"[playwright] using residential proxy: {proxy_cfg['server']}\n")
+
+            browser = p.chromium.launch(**launch_kwargs)
+            context = browser.new_context(
+                viewport={'width': 1440, 'height': 900},
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+                locale='en-US',
+                timezone_id='UTC',
+            )
+            page = context.new_page()
+
+            def _capture_audio_response(resp):
+                nonlocal audio_url
+                try:
+                    candidate = resp.url
+                    if candidate and _looks_like_googlevideo_audio_url(candidate):
+                        audio_url = candidate
+                except Exception:
+                    pass
+
+            page.on('response', _capture_audio_response)
+            page.goto(url, wait_until='domcontentloaded', timeout=60000)
+            page.wait_for_timeout(4000)
+
+            try:
+                page.locator('button.ytp-large-play-button').click(timeout=5000)
+                page.wait_for_timeout(2500)
+            except Exception:
+                sys.stderr.write('[playwright] large play button not present or not clickable\n')
+
+            while time.monotonic() - start_ts < 20:
+                if audio_url:
+                    break
+                page.wait_for_timeout(500)
+
+            if not audio_url:
+                raise RuntimeError('No se interceptó ninguna URL de audio de googlevideo.com/videoplayback con mime=audio en 15-20s.')
+
+            audio_path = os.path.join(tmpdir, 'playwright_audio.wav')
+            ffmpeg_cmd = [
+                ffmpeg_path,
+                '-y',
+                '-hide_banner',
+                '-loglevel', 'error',
+                '-i', audio_url,
+                '-vn',
+                '-acodec', 'pcm_s16le',
+                '-ar', '44100',
+                audio_path,
+            ]
+            sys.stderr.write(f'[playwright] downloading direct stream with ffmpeg from intercepted audio URL\n')
+            subprocess.run(ffmpeg_cmd, check=True, timeout=180)
+
+            size = os.path.getsize(audio_path) if os.path.exists(audio_path) else 0
+            if size < 10000:
+                raise RuntimeError(f'El stream audio descargado por ffmpeg es demasiado pequeño ({size} bytes).')
+
+            sys.stderr.write(f'[playwright] ffmpeg wrote {size} bytes to {os.path.basename(audio_path)}\n')
+            browser.close()
+            return audio_path
+    except Exception as e:
+        sys.stderr.write(f'[playwright] browser extraction failed: {e}\n')
+        return None
 
 
 def _remote_extractor_fetch(endpoint_path, payload):
@@ -936,14 +1053,23 @@ def analyze_url(url):
                 audio_path, title, artist = piped_result
                 return _analyze_audio(audio_path, title=title, artist=artist)
 
-        # ── Strategy 4: yt-dlp with multiple clients ────────────────────────
+        # ── Strategy 4: Playwright (headless Chromium) with direct URL interception ──
+        cookies_file = find_cookies_file()
+        title, artist = _fetch_metadata(url, cookies_file)
+
+        try:
+            sys.stderr.write('[analyze_url] trying Playwright Chromium browser fallback...\n')
+            playwright_audio = _playwright_download_audio(url, tmpdir)
+            if playwright_audio:
+                return _analyze_audio(playwright_audio, title=title, artist=artist)
+        except Exception as e:
+            sys.stderr.write(f'[analyze_url] Playwright browser fallback raised: {e}\n')
+
+        # ── Strategy 5: yt-dlp with multiple clients ────────────────────────
         try:
             import yt_dlp as _yt
         except ImportError:
-            return {"success": False, "error": "No se pudo obtener el audio (yt-dlp no instalado, Cobalt y Piped fallaron)."}
-
-        cookies_file = find_cookies_file()
-        title, artist = _fetch_metadata(url, cookies_file)
+            return {"success": False, "error": "No se pudo obtener el audio (yt-dlp no instalado, Cobalt, Piped y Playwright fallaron)."}
 
         configured_clients = _parse_player_clients(os.environ.get('YTDLP_PLAYER_CLIENTS', ''))
         if configured_clients:
