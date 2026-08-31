@@ -340,6 +340,40 @@ def _looks_like_googlevideo_audio_url(url):
     return 'googlevideo.com/videoplayback' in lower and 'mime=audio' in lower
 
 
+def _extract_rapidapi_download_url(payload):
+    """Extract a download URL from RapidAPI youtube-mp36 response payloads.
+
+    Handles common shapes returned by different wrappers.
+    Returns URL string or None.
+    """
+    if not isinstance(payload, dict):
+        return None
+
+    # Common key names
+    for key in ('link', 'url', 'download_url', 'downloadUrl', 'result'):
+        if key in payload and isinstance(payload[key], str) and payload[key].startswith('http'):
+            return payload[key]
+
+    # nested result object
+    result = payload.get('result') or payload.get('data') or payload.get('response')
+    if isinstance(result, dict):
+        for k in ('link', 'url', 'download_url', 'downloadUrl'):
+            if k in result and isinstance(result[k], str) and result[k].startswith('http'):
+                return result[k]
+
+    # some providers use a list of formats
+    formats = payload.get('formats') or payload.get('files') or payload.get('links')
+    if isinstance(formats, list):
+        for fmt in formats:
+            if isinstance(fmt, dict):
+                for k in ('url', 'link'):
+                    v = fmt.get(k)
+                    if isinstance(v, str) and v.startswith('http'):
+                        return v
+
+    return None
+
+
 def _playwright_download_audio(url, tmpdir):
     """Open the video in headless Chromium and intercept the direct audio stream."""
     try:
@@ -676,6 +710,56 @@ def download_via_piped(video_id, tmpdir):
 
     sys.stderr.write('[piped] all streams were IP-locked or failed\n')
     return None
+
+
+def download_via_rapidapi(video_id, tmpdir):
+    """Use RapidAPI youtube-mp36 service to get an MP3 download URL and fetch it.
+
+    Requires RAPIDAPI_KEY env var set to your RapidAPI key.
+    Returns (audio_path, title, artist) or None.
+    """
+    key = os.environ.get('RAPIDAPI_KEY', '').strip()
+    if not key:
+        sys.stderr.write('[rapidapi] RAPIDAPI_KEY not set, skipping RapidAPI extractor\n')
+        return None
+
+    import json as _json
+    import requests
+
+    url = f'https://youtube-mp36.p.rapidapi.com/dl?id={video_id}'
+    headers = {
+        'Content-Type': 'application/json',
+        'x-rapidapi-host': 'youtube-mp36.p.rapidapi.com',
+        'x-rapidapi-key': key,
+    }
+
+    try:
+        resp = requests.get(url, headers=headers, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        sys.stderr.write(f'[rapidapi] request failed: {e}\n')
+        return None
+
+    dl = _extract_rapidapi_download_url(data)
+    if not dl:
+        sys.stderr.write('[rapidapi] no download URL found in response\n')
+        return None
+
+    title = data.get('title') or ''
+    artist = data.get('uploader') or data.get('channel') or ''
+    audio_path = os.path.join(tmpdir, 'rapidapi_audio.mp3')
+
+    try:
+        size = _http_download(dl, audio_path, timeout=240)
+        sys.stderr.write(f'[rapidapi] downloaded {size} bytes from RapidAPI URL\n')
+        if size < 10000:
+            sys.stderr.write('[rapidapi] file too small\n')
+            return None
+        return audio_path, title, artist
+    except Exception as e:
+        sys.stderr.write(f'[rapidapi] download failed: {e}\n')
+        return None
 
 
 def _analyze_audio(audio_path, title='', artist=''):
@@ -1054,6 +1138,13 @@ def analyze_url(url):
                 return _analyze_audio(audio_path, title=title, artist=artist)
 
         # ── Strategy 4: Playwright (headless Chromium) with direct URL interception ──
+        # Before Playwright, try RapidAPI extractor if configured
+        if video_id:
+            sys.stderr.write('[analyze_url] trying RapidAPI extractor...\n')
+            rapid_result = download_via_rapidapi(video_id, tmpdir)
+            if rapid_result:
+                audio_path, title, artist = rapid_result
+                return _analyze_audio(audio_path, title=title, artist=artist)
         cookies_file = find_cookies_file()
         title, artist = _fetch_metadata(url, cookies_file)
 

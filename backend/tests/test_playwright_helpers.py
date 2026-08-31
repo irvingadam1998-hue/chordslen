@@ -1,7 +1,11 @@
 import os
 import unittest
 
-from backend.scripts.analyze import _looks_like_googlevideo_audio_url, _playwright_proxy_settings
+from backend.scripts.analyze import (
+    _extract_rapidapi_download_url,
+    _looks_like_googlevideo_audio_url,
+    _playwright_proxy_settings,
+)
 
 
 class TestPlaywrightHelpers(unittest.TestCase):
@@ -17,6 +21,17 @@ class TestPlaywrightHelpers(unittest.TestCase):
         self.assertTrue(_looks_like_googlevideo_audio_url(url))
 
         self.assertFalse(_looks_like_googlevideo_audio_url('https://example.com/video.mp4'))
+
+    def test_rapidapi_download_url_extraction(self):
+        payload = {
+            'status': 'ok',
+            'title': 'Demo',
+            'link': 'https://example.com/download.mp3',
+        }
+        self.assertEqual(_extract_rapidapi_download_url(payload), 'https://example.com/download.mp3')
+
+        payload2 = {'status': 'ok', 'result': {'downloadUrl': 'https://cdn.example.com/audio.mp3'}}
+        self.assertEqual(_extract_rapidapi_download_url(payload2), 'https://cdn.example.com/audio.mp3')
 
 
 if __name__ == '__main__':
