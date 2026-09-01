@@ -4,9 +4,6 @@ import json
 import os
 import tempfile
 import shutil
-import urllib.request
-import urllib.parse
-import base64
 
 NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 
@@ -272,413 +269,6 @@ def extract_video_id(url):
         if m:
             return m.group(1)
     return None
-
-def _http_download(url, dest_path, headers=None, timeout=180):
-    """Download url to dest_path. Returns file size or raises."""
-    h = {'User-Agent': 'Mozilla/5.0 (compatible; ChordLens/1.0)'}
-    if headers:
-        h.update(headers)
-    req = urllib.request.Request(url, headers=h)
-    with urllib.request.urlopen(req, timeout=timeout) as resp, open(dest_path, 'wb') as f:
-        while True:
-            chunk = resp.read(65536)
-            if not chunk:
-                break
-            f.write(chunk)
-    return os.path.getsize(dest_path)
-
-
-def _download_bytes(dest_path, payload):
-    with open(dest_path, 'wb') as f:
-        f.write(payload)
-    return os.path.getsize(dest_path)
-
-
-def _remote_extractor_base():
-    return os.environ.get('REMOTE_EXTRACTOR_URL', '').strip().rstrip('/')
-
-
-def _remote_extractor_headers():
-    headers = {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'User-Agent': 'ChordLens/1.0',
-    }
-    token = os.environ.get('REMOTE_EXTRACTOR_TOKEN', '').strip()
-    if token:
-        headers['Authorization'] = f'Bearer {token}'
-        headers['x-api-key'] = token
-    return headers
-
-
-def _extract_rapidapi_download_url(payload):
-    """Extract a download URL from RapidAPI youtube-mp36 response payloads.
-
-    Handles common shapes returned by different wrappers.
-    Returns URL string or None.
-    """
-    if not isinstance(payload, dict):
-        return None
-
-    # Common key names
-    for key in ('link', 'url', 'download_url', 'downloadUrl', 'result'):
-        if key in payload and isinstance(payload[key], str) and payload[key].startswith('http'):
-            return payload[key]
-
-    # nested result object
-    result = payload.get('result') or payload.get('data') or payload.get('response')
-    if isinstance(result, dict):
-        for k in ('link', 'url', 'download_url', 'downloadUrl'):
-            if k in result and isinstance(result[k], str) and result[k].startswith('http'):
-                return result[k]
-
-    # some providers use a list of formats
-    formats = payload.get('formats') or payload.get('files') or payload.get('links')
-    if isinstance(formats, list):
-        for fmt in formats:
-            if isinstance(fmt, dict):
-                for k in ('url', 'link'):
-                    v = fmt.get(k)
-                    if isinstance(v, str) and v.startswith('http'):
-                        return v
-
-    return None
-
-
-def _remote_extractor_fetch(endpoint_path, payload):
-    base = _remote_extractor_base()
-    if not base:
-        return None
-
-    req = urllib.request.Request(
-        base + endpoint_path,
-        data=json.dumps(payload).encode('utf-8'),
-        headers=_remote_extractor_headers(),
-        method='POST',
-    )
-
-    try:
-        with urllib.request.urlopen(req, timeout=180) as resp:
-            data = json.loads(resp.read())
-    except Exception as e:
-        sys.stderr.write(f'[remote-extractor] request failed: {e}\n')
-        return None
-
-    if data.get('success') is False:
-        sys.stderr.write(f"[remote-extractor] error: {data.get('error', 'unknown')}\n")
-        return None
-
-    return data
-
-
-def _remote_extractor_audio(url, tmpdir):
-    endpoint = os.environ.get('REMOTE_EXTRACTOR_AUDIO_PATH', '/audio').strip() or '/audio'
-    data = _remote_extractor_fetch(endpoint, {'url': url, 'format': 'wav'})
-    if not data:
-        return None
-
-    title = data.get('title', '')
-    artist = data.get('artist', '')
-    ext = (data.get('ext') or 'wav').strip('.')
-    audio_path = os.path.join(tmpdir, f'remote_audio.{ext}')
-
-    remote_url = data.get('audio_url') or data.get('download_url') or data.get('url')
-    if remote_url:
-        try:
-            size = _http_download(remote_url, audio_path, timeout=240)
-            sys.stderr.write(f'[remote-extractor] downloaded {size} bytes from URL\n')
-            if size > 10000:
-                return audio_path, title, artist
-        except Exception as e:
-            sys.stderr.write(f'[remote-extractor] URL download failed: {e}\n')
-
-    encoded = data.get('audio_base64') or data.get('content_base64') or data.get('data_base64')
-    if encoded:
-        try:
-            size = _download_bytes(audio_path, base64.b64decode(encoded))
-            sys.stderr.write(f'[remote-extractor] wrote {size} bytes from base64\n')
-            if size > 10000:
-                return audio_path, title, artist
-        except Exception as e:
-            sys.stderr.write(f'[remote-extractor] base64 decode failed: {e}\n')
-
-    sys.stderr.write('[remote-extractor] response had no usable audio payload\n')
-    return None
-
-
-def download_via_invidious(video_id, tmpdir):
-    """
-    Download audio via Invidious proxy with local=true.
-    Invidious fetches from YouTube CDN on THEIR server and streams to us,
-    so Railway's IP is never seen by YouTube.
-    """
-    import urllib.request
-    import json as _j
-
-    INSTANCES = [
-        'https://inv.nadeko.net',
-        'https://invidious.privacyredirect.com',
-        'https://yt.cdaut.de',
-        'https://invidious.nerdvpn.de',
-        'https://invidious.io',
-        'https://vid.puffyan.us',
-        'https://invidious.lunar.icu',
-    ]
-
-    for instance in INSTANCES:
-        try:
-            api_url = f'{instance}/api/v1/videos/{video_id}?fields=title,author,adaptiveFormats'
-            req = urllib.request.Request(api_url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                data = _j.loads(resp.read())
-        except Exception as e:
-            sys.stderr.write(f'[invidious] {instance} metadata failed: {e}\n')
-            continue
-
-        title = data.get('title', '')
-        artist = data.get('author', '')
-        formats = data.get('adaptiveFormats', [])
-        audio = [f for f in formats if f.get('type', '').startswith('audio/')]
-        if not audio:
-            sys.stderr.write(f'[invidious] {instance} no audio formats\n')
-            continue
-
-        audio.sort(key=lambda f: f.get('bitrate', 0), reverse=True)
-
-        for fmt in audio[:3]:
-            itag = fmt.get('itag')
-            if not itag:
-                continue
-            mime = fmt.get('type', '')
-            ext = 'webm' if ('webm' in mime or 'opus' in mime) else 'm4a'
-            audio_path = os.path.join(tmpdir, f'invidious_{itag}.{ext}')
-            proxy_url = f'{instance}/latest_version?id={video_id}&itag={itag}&local=true'
-            sys.stderr.write(f'[invidious] {instance} itag={itag} ({ext})\n')
-            try:
-                size = _http_download(proxy_url, audio_path,
-                                      headers={'Referer': instance + '/'},
-                                      timeout=240)
-                sys.stderr.write(f'[invidious] downloaded {size} bytes\n')
-                if size > 50000:
-                    return audio_path, title, artist
-                sys.stderr.write(f'[invidious] file too small ({size}), trying next\n')
-            except Exception as e:
-                sys.stderr.write(f'[invidious] download error: {e}\n')
-                continue
-
-    sys.stderr.write('[invidious] all instances failed\n')
-    return None
-
-
-def download_via_cobalt(video_id, tmpdir):
-    """
-    Download audio via Cobalt.tools — open-source media downloader that handles
-    YouTube bot detection on their end. Returns (audio_path, None, None) or None.
-    """
-    import urllib.request
-    import json as _json
-
-    url = f'https://www.youtube.com/watch?v={video_id}'
-    body = _json.dumps({'url': url, 'downloadMode': 'audio'}).encode()
-    req = urllib.request.Request(
-        'https://api.cobalt.tools/',
-        data=body,
-        headers={
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'User-Agent': 'Mozilla/5.0 (compatible; ChordLens/1.0)',
-        },
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            result = _json.loads(resp.read())
-    except Exception as e:
-        sys.stderr.write(f'[cobalt] API request failed: {e}\n')
-        return None
-
-    status = result.get('status', '')
-    sys.stderr.write(f'[cobalt] status={status}\n')
-
-    if status not in ('tunnel', 'redirect', 'stream'):
-        err = result.get('error', {})
-        sys.stderr.write(f'[cobalt] error detail: {err}\n')
-        return None
-
-    download_url = result.get('url')
-    if not download_url:
-        sys.stderr.write('[cobalt] no download URL in response\n')
-        return None
-
-    audio_path = os.path.join(tmpdir, 'audio.mp3')
-    try:
-        size = _http_download(download_url, audio_path)
-        sys.stderr.write(f'[cobalt] downloaded {size} bytes\n')
-        if size < 10000:
-            sys.stderr.write('[cobalt] file too small — likely failed\n')
-            return None
-        return audio_path, '', ''
-    except Exception as e:
-        sys.stderr.write(f'[cobalt] download failed: {e}\n')
-        return None
-
-
-def download_via_piped(video_id, tmpdir):
-    """
-    Download audio via Piped API. Returns (audio_path, title, artist) or None.
-    Note: some Piped instances return IP-locked googlevideo URLs; those are skipped.
-    """
-    import urllib.request
-    import json as _json
-
-    PIPED_INSTANCES = [
-        'https://pipedapi.kavin.rocks',
-        'https://pipedapi.mha.fi',
-        'https://api.piped.projectsegfau.lt',
-        'https://pipedapi.adminforge.de',
-    ]
-
-    data = None
-    used_instance = None
-    for instance in PIPED_INSTANCES:
-        try:
-            req = urllib.request.Request(
-                f'{instance}/streams/{video_id}',
-                headers={'User-Agent': 'Mozilla/5.0'},
-            )
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                data = _json.loads(resp.read())
-            used_instance = instance
-            sys.stderr.write(f'[piped] got metadata from {instance}\n')
-            break
-        except Exception as e:
-            sys.stderr.write(f'[piped] {instance} failed: {e}\n')
-            continue
-
-    if not data or not used_instance:
-        sys.stderr.write('[piped] all instances failed\n')
-        return None
-
-    title = data.get('title', '')
-    artist = data.get('uploader', '')
-    audio_streams = data.get('audioStreams', [])
-    if not audio_streams:
-        sys.stderr.write('[piped] no audio streams in response\n')
-        return None
-
-    audio_streams.sort(key=lambda x: x.get('bitrate', 0), reverse=True)
-
-    for stream in audio_streams:
-        stream_url = stream.get('url', '')
-        if not stream_url:
-            continue
-
-        if 'googlevideo.com' in stream_url or 'youtube.com/videoplayback' in stream_url:
-            sys.stderr.write(f'[piped] skipping IP-locked CDN URL\n')
-            continue
-
-        mime = stream.get('mimeType', '')
-        ext = 'webm' if ('webm' in mime or 'opus' in mime) else 'm4a'
-        audio_path = os.path.join(tmpdir, f'audio.{ext}')
-
-        try:
-            sys.stderr.write(f'[piped] downloading proxied stream: {stream_url[:80]}\n')
-            size = _http_download(stream_url, audio_path, headers={'Referer': used_instance + '/'})
-            sys.stderr.write(f'[piped] downloaded {size} bytes\n')
-            if size < 10000:
-                sys.stderr.write('[piped] file too small\n')
-                continue
-            return audio_path, title, artist
-        except Exception as e:
-            sys.stderr.write(f'[piped] stream download failed: {e}\n')
-            continue
-
-    sys.stderr.write('[piped] all streams were IP-locked or failed\n')
-    return None
-
-
-_last_rapidapi_error = None
-
-
-def download_via_rapidapi(video_id, tmpdir):
-    """Use RapidAPI youtube-mp36 service to get an MP3 download URL and fetch it.
-
-    Requires RAPIDAPI_KEY env var set to your RapidAPI key.
-    Returns (audio_path, title, artist) or None. On failure, sets
-    _last_rapidapi_error with a short, key-free reason for the caller.
-    """
-    global _last_rapidapi_error
-    _last_rapidapi_error = None
-
-    key = os.environ.get('RAPIDAPI_KEY', '').strip()
-    if not key:
-        _last_rapidapi_error = 'RAPIDAPI_KEY no está configurada en el entorno del worker'
-        sys.stderr.write('[rapidapi] RAPIDAPI_KEY not set, skipping RapidAPI extractor\n')
-        return None
-
-    import time as _time
-    import requests
-
-    url = f'https://youtube-mp36.p.rapidapi.com/dl?id={video_id}'
-    headers = {
-        'Content-Type': 'application/json',
-        'x-rapidapi-host': 'youtube-mp36.p.rapidapi.com',
-        'x-rapidapi-key': key,
-    }
-
-    # This API converts asynchronously: the first call(s) return
-    # status "processing" with no usable link yet. Poll until "ok".
-    data = None
-    max_attempts = 15
-    for attempt in range(1, max_attempts + 1):
-        try:
-            resp = requests.get(url, headers=headers, timeout=30)
-            resp.raise_for_status()
-            data = resp.json()
-        except Exception as e:
-            status = getattr(getattr(e, 'response', None), 'status_code', None)
-            _last_rapidapi_error = f'petición a RapidAPI falló (HTTP {status}): {e}' if status else f'petición a RapidAPI falló: {e}'
-            sys.stderr.write(f'[rapidapi] request failed: {e}\n')
-            return None
-
-        status_field = (data.get('status') or '').lower()
-        sys.stderr.write(f'[rapidapi] attempt {attempt}/{max_attempts}: status={status_field!r} progress={data.get("progress")}\n')
-
-        if status_field == 'fail' or status_field == 'error':
-            _last_rapidapi_error = f'RapidAPI devolvió error, respuesta: {data}'
-            sys.stderr.write('[rapidapi] provider reported failure status\n')
-            return None
-
-        if status_field == 'ok':
-            break
-
-        _time.sleep(2)
-    else:
-        _last_rapidapi_error = f'la conversión no terminó tras {max_attempts} intentos, última respuesta: {data}'
-        sys.stderr.write('[rapidapi] conversion never reached status=ok\n')
-        return None
-
-    dl = _extract_rapidapi_download_url(data)
-    if not dl:
-        _last_rapidapi_error = f'RapidAPI no devolvió URL de descarga, respuesta: {data}'
-        sys.stderr.write('[rapidapi] no download URL found in response\n')
-        return None
-
-    title = data.get('title') or ''
-    artist = data.get('uploader') or data.get('channel') or ''
-    audio_path = os.path.join(tmpdir, 'rapidapi_audio.mp3')
-
-    try:
-        size = _http_download(dl, audio_path, timeout=240)
-        sys.stderr.write(f'[rapidapi] downloaded {size} bytes from RapidAPI URL\n')
-        if size < 10000:
-            _last_rapidapi_error = f'archivo descargado demasiado pequeño ({size} bytes)'
-            sys.stderr.write('[rapidapi] file too small\n')
-            return None
-        return audio_path, title, artist
-    except Exception as e:
-        _last_rapidapi_error = f'descarga del archivo falló: {e}'
-        sys.stderr.write(f'[rapidapi] download failed: {e}\n')
-        return None
 
 
 def _analyze_audio(audio_path, title='', artist=''):
@@ -1024,113 +614,60 @@ def analyze_url(url):
     sys.stderr.write(f'[analyze_url] video_id={video_id}\n')
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        # NOTE: por el momento solo usamos RapidAPI. Las demás estrategias
-        # (remoto, Invidious, Cobalt, Piped, Playwright, yt-dlp) quedan
-        # comentadas más abajo para poder reactivarlas fácilmente.
         if not video_id:
             return {"success": False, "error": "No se pudo extraer el video_id de la URL."}
 
-        sys.stderr.write('[analyze_url] trying RapidAPI extractor...\n')
-        rapid_result = download_via_rapidapi(video_id, tmpdir)
-        if rapid_result:
-            audio_path, title, artist = rapid_result
-            return _analyze_audio(audio_path, title=title, artist=artist)
+        try:
+            import yt_dlp as _yt
+        except ImportError:
+            return {"success": False, "error": "No se pudo obtener el audio (yt-dlp no instalado)."}
 
-        sys.stderr.write('[analyze_url] RapidAPI extractor failed\n')
-        reason = _last_rapidapi_error or 'motivo desconocido'
-        return {"success": False, "error": f"No se pudo obtener el audio vía RapidAPI: {reason}"}
+        cookies_file = find_cookies_file()
+        title, artist = _fetch_metadata(url, cookies_file)
 
-        # if _remote_extractor_base():
-        #     sys.stderr.write('[analyze_url] trying remote extractor...\n')
-        #     remote_result = _remote_extractor_audio(url, tmpdir)
-        #     if remote_result:
-        #         audio_path, title, artist = remote_result
-        #         return _analyze_audio(audio_path, title=title, artist=artist)
-        #
-        # # ── Strategy 1: Invidious proxy (local=true hides Railway IP) ─────────
-        # if video_id:
-        #     sys.stderr.write('[analyze_url] trying Invidious...\n')
-        #     inv_result = download_via_invidious(video_id, tmpdir)
-        #     if inv_result:
-        #         audio_path, title, artist = inv_result
-        #         return _analyze_audio(audio_path, title=title, artist=artist)
-        #
-        # # ── Strategy 2: Cobalt.tools ────────────────────────────────────────
-        # if video_id:
-        #     sys.stderr.write('[analyze_url] trying Cobalt...\n')
-        #     cobalt_result = download_via_cobalt(video_id, tmpdir)
-        #     if cobalt_result:
-        #         audio_path, _, _ = cobalt_result
-        #         title, artist = _fetch_metadata(url)
-        #         return _analyze_audio(audio_path, title=title, artist=artist)
-        #
-        # # ── Strategy 3: Piped API (proxied streams only) ────────────────────
-        # if video_id:
-        #     sys.stderr.write('[analyze_url] trying Piped...\n')
-        #     piped_result = download_via_piped(video_id, tmpdir)
-        #     if piped_result:
-        #         audio_path, title, artist = piped_result
-        #         return _analyze_audio(audio_path, title=title, artist=artist)
-        #
-        # # Before falling through to yt-dlp, try RapidAPI extractor if configured
-        # if video_id:
-        #     sys.stderr.write('[analyze_url] trying RapidAPI extractor...\n')
-        #     rapid_result = download_via_rapidapi(video_id, tmpdir)
-        #     if rapid_result:
-        #         audio_path, title, artist = rapid_result
-        #         return _analyze_audio(audio_path, title=title, artist=artist)
-        # cookies_file = find_cookies_file()
-        # title, artist = _fetch_metadata(url, cookies_file)
-        #
-        # # ── Strategy 4: yt-dlp with multiple clients ────────────────────────
-        # try:
-        #     import yt_dlp as _yt
-        # except ImportError:
-        #     return {"success": False, "error": "No se pudo obtener el audio (yt-dlp no instalado, Cobalt y Piped fallaron)."}
-        #
-        # configured_clients = _parse_player_clients(os.environ.get('YTDLP_PLAYER_CLIENTS', ''))
-        # if configured_clients:
-        #     yt_strategies = [[client] for client in configured_clients]
-        # elif cookies_file:
-        #     yt_strategies = [['web'], ['android'], ['ios'], ['tv_embedded']]
-        # else:
-        #     yt_strategies = [['android'], ['ios'], ['android_embedded'], ['tv_embedded']]
-        #
-        # audio_path = None
-        # for clients in yt_strategies:
-        #     sys.stderr.write(f'[analyze_url] trying yt-dlp {clients}...\n')
-        #     subdir = tempfile.mkdtemp(dir=tmpdir)
-        #     audio_path = _ytdlp_download(url, subdir, clients, cookies_file)
-        #     if audio_path:
-        #         break
-        #
-        # if not audio_path:
-        #     has_cookies = cookies_file is not None
-        #     if has_cookies:
-        #         msg = (
-        #             "YouTube bloqueó la descarga incluso con cookies. "
-        #             "Las cookies pueden haber expirado — exporta unas nuevas y actualiza YOUTUBE_COOKIES_B64 en Railway."
-        #         )
-        #     else:
-        #         msg = (
-        #             "YouTube bloquea las descargas desde servidores (detección de bots). "
-        #             "Prueba un extractor remoto con REMOTE_EXTRACTOR_URL o exporta cookies de YouTube "
-        #             "y agrega la variable YOUTUBE_COOKIES_B64 en Railway. Instrucciones en los logs del servidor."
-        #         )
-        #     sys.stderr.write('[analyze_url] ALL strategies failed\n')
-        #     sys.stderr.write('=' * 60 + '\n')
-        #     sys.stderr.write('SOLUCIÓN: Configurar cookies de YouTube en Railway\n')
-        #     sys.stderr.write('1. Instalar extensión: "Get cookies.txt LOCALLY" (Chrome/Firefox)\n')
-        #     sys.stderr.write('2. Ir a youtube.com con sesión iniciada\n')
-        #     sys.stderr.write('3. Exportar cookies.txt con la extensión\n')
-        #     sys.stderr.write('4. Codificar en base64:\n')
-        #     sys.stderr.write('   Linux/Mac: base64 -w 0 cookies.txt\n')
-        #     sys.stderr.write('   Windows PowerShell: [Convert]::ToBase64String([IO.File]::ReadAllBytes("cookies.txt"))\n')
-        #     sys.stderr.write('5. En Railway > Variables: YOUTUBE_COOKIES_B64 = <resultado del paso 4>\n')
-        #     sys.stderr.write('=' * 60 + '\n')
-        #     return {"success": False, "error": msg}
-        #
-        # return _analyze_audio(audio_path, title=title, artist=artist)
+        configured_clients = _parse_player_clients(os.environ.get('YTDLP_PLAYER_CLIENTS', ''))
+        if configured_clients:
+            yt_strategies = [[client] for client in configured_clients]
+        elif cookies_file:
+            yt_strategies = [['web'], ['android'], ['ios'], ['tv_embedded']]
+        else:
+            yt_strategies = [['android'], ['ios'], ['android_embedded'], ['tv_embedded']]
+
+        audio_path = None
+        for clients in yt_strategies:
+            sys.stderr.write(f'[analyze_url] trying yt-dlp {clients}...\n')
+            subdir = tempfile.mkdtemp(dir=tmpdir)
+            audio_path = _ytdlp_download(url, subdir, clients, cookies_file)
+            if audio_path:
+                break
+
+        if not audio_path:
+            has_cookies = cookies_file is not None
+            if has_cookies:
+                msg = (
+                    "YouTube bloqueó la descarga incluso con cookies. "
+                    "Las cookies pueden haber expirado — exporta unas nuevas y actualiza YOUTUBE_COOKIES_B64."
+                )
+            else:
+                msg = (
+                    "YouTube bloquea las descargas desde servidores (detección de bots). "
+                    "Exporta cookies de YouTube y agrega la variable YOUTUBE_COOKIES_B64. "
+                    "Instrucciones en los logs del servidor."
+                )
+            sys.stderr.write('[analyze_url] ALL yt-dlp strategies failed\n')
+            sys.stderr.write('=' * 60 + '\n')
+            sys.stderr.write('SOLUCIÓN: Configurar cookies de YouTube\n')
+            sys.stderr.write('1. Instalar extensión: "Get cookies.txt LOCALLY" (Chrome/Firefox)\n')
+            sys.stderr.write('2. Ir a youtube.com con sesión iniciada\n')
+            sys.stderr.write('3. Exportar cookies.txt con la extensión\n')
+            sys.stderr.write('4. Codificar en base64:\n')
+            sys.stderr.write('   Linux/Mac: base64 -w 0 cookies.txt\n')
+            sys.stderr.write('   Windows PowerShell: [Convert]::ToBase64String([IO.File]::ReadAllBytes("cookies.txt"))\n')
+            sys.stderr.write('5. Definir YOUTUBE_COOKIES_B64 = <resultado del paso 4>\n')
+            sys.stderr.write('=' * 60 + '\n')
+            return {"success": False, "error": msg}
+
+        return _analyze_audio(audio_path, title=title, artist=artist)
 
 
 def _fetch_metadata(url, cookies_file=None):
