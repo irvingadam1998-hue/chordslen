@@ -596,38 +596,47 @@ def download_via_piped(video_id, tmpdir):
     return None
 
 
+_last_rapidapi_error = None
+
+
 def download_via_rapidapi(video_id, tmpdir):
     """Use RapidAPI youtube-mp36 service to get an MP3 download URL and fetch it.
 
     Requires RAPIDAPI_KEY env var set to your RapidAPI key.
-    Returns (audio_path, title, artist) or None.
+    Returns (audio_path, title, artist) or None. On failure, sets
+    _last_rapidapi_error with a short, key-free reason for the caller.
     """
-    # key = os.environ.get('RAPIDAPI_KEY', '').strip()
-    # if not key:
-    #     sys.stderr.write('[rapidapi] RAPIDAPI_KEY not set, skipping RapidAPI extractor\n')
-    #     return None
+    global _last_rapidapi_error
+    _last_rapidapi_error = None
 
-    import json as _json
+    key = os.environ.get('RAPIDAPI_KEY', '').strip()
+    if not key:
+        _last_rapidapi_error = 'RAPIDAPI_KEY no está configurada en el entorno del worker'
+        sys.stderr.write('[rapidapi] RAPIDAPI_KEY not set, skipping RapidAPI extractor\n')
+        return None
+
     import requests
 
     url = f'https://youtube-mp36.p.rapidapi.com/dl?id={video_id}'
     headers = {
         'Content-Type': 'application/json',
         'x-rapidapi-host': 'youtube-mp36.p.rapidapi.com',
-        'x-rapidapi-key': "3313b44cc8msh6f2b2e99c4905cdp1585dajsn0c29ada48075",
+        'x-rapidapi-key': key,
     }
-
 
     try:
         resp = requests.get(url, headers=headers, timeout=30)
         resp.raise_for_status()
         data = resp.json()
     except Exception as e:
+        status = getattr(getattr(e, 'response', None), 'status_code', None)
+        _last_rapidapi_error = f'petición a RapidAPI falló (HTTP {status}): {e}' if status else f'petición a RapidAPI falló: {e}'
         sys.stderr.write(f'[rapidapi] request failed: {e}\n')
         return None
 
     dl = _extract_rapidapi_download_url(data)
     if not dl:
+        _last_rapidapi_error = f'RapidAPI no devolvió URL de descarga, respuesta: {data}'
         sys.stderr.write('[rapidapi] no download URL found in response\n')
         return None
 
@@ -639,10 +648,12 @@ def download_via_rapidapi(video_id, tmpdir):
         size = _http_download(dl, audio_path, timeout=240)
         sys.stderr.write(f'[rapidapi] downloaded {size} bytes from RapidAPI URL\n')
         if size < 10000:
+            _last_rapidapi_error = f'archivo descargado demasiado pequeño ({size} bytes)'
             sys.stderr.write('[rapidapi] file too small\n')
             return None
         return audio_path, title, artist
     except Exception as e:
+        _last_rapidapi_error = f'descarga del archivo falló: {e}'
         sys.stderr.write(f'[rapidapi] download failed: {e}\n')
         return None
 
@@ -1003,7 +1014,8 @@ def analyze_url(url):
             return _analyze_audio(audio_path, title=title, artist=artist)
 
         sys.stderr.write('[analyze_url] RapidAPI extractor failed\n')
-        return {"success": False, "error": "No se pudo obtener el audio vía RapidAPI. Verifica RAPIDAPI_KEY."}
+        reason = _last_rapidapi_error or 'motivo desconocido'
+        return {"success": False, "error": f"No se pudo obtener el audio vía RapidAPI: {reason}"}
 
         # if _remote_extractor_base():
         #     sys.stderr.write('[analyze_url] trying remote extractor...\n')
