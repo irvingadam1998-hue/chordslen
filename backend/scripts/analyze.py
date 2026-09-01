@@ -615,6 +615,7 @@ def download_via_rapidapi(video_id, tmpdir):
         sys.stderr.write('[rapidapi] RAPIDAPI_KEY not set, skipping RapidAPI extractor\n')
         return None
 
+    import time as _time
     import requests
 
     url = f'https://youtube-mp36.p.rapidapi.com/dl?id={video_id}'
@@ -624,14 +625,36 @@ def download_via_rapidapi(video_id, tmpdir):
         'x-rapidapi-key': key,
     }
 
-    try:
-        resp = requests.get(url, headers=headers, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as e:
-        status = getattr(getattr(e, 'response', None), 'status_code', None)
-        _last_rapidapi_error = f'petición a RapidAPI falló (HTTP {status}): {e}' if status else f'petición a RapidAPI falló: {e}'
-        sys.stderr.write(f'[rapidapi] request failed: {e}\n')
+    # This API converts asynchronously: the first call(s) return
+    # status "processing" with no usable link yet. Poll until "ok".
+    data = None
+    max_attempts = 15
+    for attempt in range(1, max_attempts + 1):
+        try:
+            resp = requests.get(url, headers=headers, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as e:
+            status = getattr(getattr(e, 'response', None), 'status_code', None)
+            _last_rapidapi_error = f'petición a RapidAPI falló (HTTP {status}): {e}' if status else f'petición a RapidAPI falló: {e}'
+            sys.stderr.write(f'[rapidapi] request failed: {e}\n')
+            return None
+
+        status_field = (data.get('status') or '').lower()
+        sys.stderr.write(f'[rapidapi] attempt {attempt}/{max_attempts}: status={status_field!r} progress={data.get("progress")}\n')
+
+        if status_field == 'fail' or status_field == 'error':
+            _last_rapidapi_error = f'RapidAPI devolvió error, respuesta: {data}'
+            sys.stderr.write('[rapidapi] provider reported failure status\n')
+            return None
+
+        if status_field == 'ok':
+            break
+
+        _time.sleep(2)
+    else:
+        _last_rapidapi_error = f'la conversión no terminó tras {max_attempts} intentos, última respuesta: {data}'
+        sys.stderr.write('[rapidapi] conversion never reached status=ok\n')
         return None
 
     dl = _extract_rapidapi_download_url(data)
