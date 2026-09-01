@@ -602,10 +602,10 @@ def download_via_rapidapi(video_id, tmpdir):
     Requires RAPIDAPI_KEY env var set to your RapidAPI key.
     Returns (audio_path, title, artist) or None.
     """
-    key = os.environ.get('RAPIDAPI_KEY', '').strip()
-    if not key:
-        sys.stderr.write('[rapidapi] RAPIDAPI_KEY not set, skipping RapidAPI extractor\n')
-        return None
+    # key = os.environ.get('RAPIDAPI_KEY', '').strip()
+    # if not key:
+    #     sys.stderr.write('[rapidapi] RAPIDAPI_KEY not set, skipping RapidAPI extractor\n')
+    #     return None
 
     import json as _json
     import requests
