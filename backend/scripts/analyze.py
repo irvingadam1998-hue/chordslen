@@ -1105,106 +1105,121 @@ def analyze_url(url):
     sys.stderr.write(f'[analyze_url] video_id={video_id}\n')
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        if _remote_extractor_base():
-            sys.stderr.write('[analyze_url] trying remote extractor...\n')
-            remote_result = _remote_extractor_audio(url, tmpdir)
-            if remote_result:
-                audio_path, title, artist = remote_result
-                return _analyze_audio(audio_path, title=title, artist=artist)
+        # NOTE: por el momento solo usamos RapidAPI. Las demás estrategias
+        # (remoto, Invidious, Cobalt, Piped, Playwright, yt-dlp) quedan
+        # comentadas más abajo para poder reactivarlas fácilmente.
+        if not video_id:
+            return {"success": False, "error": "No se pudo extraer el video_id de la URL."}
 
-        # ── Strategy 1: Invidious proxy (local=true hides Railway IP) ─────────
-        if video_id:
-            sys.stderr.write('[analyze_url] trying Invidious...\n')
-            inv_result = download_via_invidious(video_id, tmpdir)
-            if inv_result:
-                audio_path, title, artist = inv_result
-                return _analyze_audio(audio_path, title=title, artist=artist)
+        sys.stderr.write('[analyze_url] trying RapidAPI extractor...\n')
+        rapid_result = download_via_rapidapi(video_id, tmpdir)
+        if rapid_result:
+            audio_path, title, artist = rapid_result
+            return _analyze_audio(audio_path, title=title, artist=artist)
 
-        # ── Strategy 2: Cobalt.tools ────────────────────────────────────────
-        if video_id:
-            sys.stderr.write('[analyze_url] trying Cobalt...\n')
-            cobalt_result = download_via_cobalt(video_id, tmpdir)
-            if cobalt_result:
-                audio_path, _, _ = cobalt_result
-                title, artist = _fetch_metadata(url)
-                return _analyze_audio(audio_path, title=title, artist=artist)
+        sys.stderr.write('[analyze_url] RapidAPI extractor failed\n')
+        return {"success": False, "error": "No se pudo obtener el audio vía RapidAPI. Verifica RAPIDAPI_KEY."}
 
-        # ── Strategy 3: Piped API (proxied streams only) ────────────────────
-        if video_id:
-            sys.stderr.write('[analyze_url] trying Piped...\n')
-            piped_result = download_via_piped(video_id, tmpdir)
-            if piped_result:
-                audio_path, title, artist = piped_result
-                return _analyze_audio(audio_path, title=title, artist=artist)
-
-        # ── Strategy 4: Playwright (headless Chromium) with direct URL interception ──
-        # Before Playwright, try RapidAPI extractor if configured
-        if video_id:
-            sys.stderr.write('[analyze_url] trying RapidAPI extractor...\n')
-            rapid_result = download_via_rapidapi(video_id, tmpdir)
-            if rapid_result:
-                audio_path, title, artist = rapid_result
-                return _analyze_audio(audio_path, title=title, artist=artist)
-        cookies_file = find_cookies_file()
-        title, artist = _fetch_metadata(url, cookies_file)
-
-        try:
-            sys.stderr.write('[analyze_url] trying Playwright Chromium browser fallback...\n')
-            playwright_audio = _playwright_download_audio(url, tmpdir)
-            if playwright_audio:
-                return _analyze_audio(playwright_audio, title=title, artist=artist)
-        except Exception as e:
-            sys.stderr.write(f'[analyze_url] Playwright browser fallback raised: {e}\n')
-
-        # ── Strategy 5: yt-dlp with multiple clients ────────────────────────
-        try:
-            import yt_dlp as _yt
-        except ImportError:
-            return {"success": False, "error": "No se pudo obtener el audio (yt-dlp no instalado, Cobalt, Piped y Playwright fallaron)."}
-
-        configured_clients = _parse_player_clients(os.environ.get('YTDLP_PLAYER_CLIENTS', ''))
-        if configured_clients:
-            yt_strategies = [[client] for client in configured_clients]
-        elif cookies_file:
-            yt_strategies = [['web'], ['android'], ['ios'], ['tv_embedded']]
-        else:
-            yt_strategies = [['android'], ['ios'], ['android_embedded'], ['tv_embedded']]
-
-        audio_path = None
-        for clients in yt_strategies:
-            sys.stderr.write(f'[analyze_url] trying yt-dlp {clients}...\n')
-            subdir = tempfile.mkdtemp(dir=tmpdir)
-            audio_path = _ytdlp_download(url, subdir, clients, cookies_file)
-            if audio_path:
-                break
-
-        if not audio_path:
-            has_cookies = cookies_file is not None
-            if has_cookies:
-                msg = (
-                    "YouTube bloqueó la descarga incluso con cookies. "
-                    "Las cookies pueden haber expirado — exporta unas nuevas y actualiza YOUTUBE_COOKIES_B64 en Railway."
-                )
-            else:
-                msg = (
-                    "YouTube bloquea las descargas desde servidores (detección de bots). "
-                    "Prueba un extractor remoto con REMOTE_EXTRACTOR_URL o exporta cookies de YouTube "
-                    "y agrega la variable YOUTUBE_COOKIES_B64 en Railway. Instrucciones en los logs del servidor."
-                )
-            sys.stderr.write('[analyze_url] ALL strategies failed\n')
-            sys.stderr.write('=' * 60 + '\n')
-            sys.stderr.write('SOLUCIÓN: Configurar cookies de YouTube en Railway\n')
-            sys.stderr.write('1. Instalar extensión: "Get cookies.txt LOCALLY" (Chrome/Firefox)\n')
-            sys.stderr.write('2. Ir a youtube.com con sesión iniciada\n')
-            sys.stderr.write('3. Exportar cookies.txt con la extensión\n')
-            sys.stderr.write('4. Codificar en base64:\n')
-            sys.stderr.write('   Linux/Mac: base64 -w 0 cookies.txt\n')
-            sys.stderr.write('   Windows PowerShell: [Convert]::ToBase64String([IO.File]::ReadAllBytes("cookies.txt"))\n')
-            sys.stderr.write('5. En Railway > Variables: YOUTUBE_COOKIES_B64 = <resultado del paso 4>\n')
-            sys.stderr.write('=' * 60 + '\n')
-            return {"success": False, "error": msg}
-
-        return _analyze_audio(audio_path, title=title, artist=artist)
+        # if _remote_extractor_base():
+        #     sys.stderr.write('[analyze_url] trying remote extractor...\n')
+        #     remote_result = _remote_extractor_audio(url, tmpdir)
+        #     if remote_result:
+        #         audio_path, title, artist = remote_result
+        #         return _analyze_audio(audio_path, title=title, artist=artist)
+        #
+        # # ── Strategy 1: Invidious proxy (local=true hides Railway IP) ─────────
+        # if video_id:
+        #     sys.stderr.write('[analyze_url] trying Invidious...\n')
+        #     inv_result = download_via_invidious(video_id, tmpdir)
+        #     if inv_result:
+        #         audio_path, title, artist = inv_result
+        #         return _analyze_audio(audio_path, title=title, artist=artist)
+        #
+        # # ── Strategy 2: Cobalt.tools ────────────────────────────────────────
+        # if video_id:
+        #     sys.stderr.write('[analyze_url] trying Cobalt...\n')
+        #     cobalt_result = download_via_cobalt(video_id, tmpdir)
+        #     if cobalt_result:
+        #         audio_path, _, _ = cobalt_result
+        #         title, artist = _fetch_metadata(url)
+        #         return _analyze_audio(audio_path, title=title, artist=artist)
+        #
+        # # ── Strategy 3: Piped API (proxied streams only) ────────────────────
+        # if video_id:
+        #     sys.stderr.write('[analyze_url] trying Piped...\n')
+        #     piped_result = download_via_piped(video_id, tmpdir)
+        #     if piped_result:
+        #         audio_path, title, artist = piped_result
+        #         return _analyze_audio(audio_path, title=title, artist=artist)
+        #
+        # # ── Strategy 4: Playwright (headless Chromium) with direct URL interception ──
+        # # Before Playwright, try RapidAPI extractor if configured
+        # if video_id:
+        #     sys.stderr.write('[analyze_url] trying RapidAPI extractor...\n')
+        #     rapid_result = download_via_rapidapi(video_id, tmpdir)
+        #     if rapid_result:
+        #         audio_path, title, artist = rapid_result
+        #         return _analyze_audio(audio_path, title=title, artist=artist)
+        # cookies_file = find_cookies_file()
+        # title, artist = _fetch_metadata(url, cookies_file)
+        #
+        # try:
+        #     sys.stderr.write('[analyze_url] trying Playwright Chromium browser fallback...\n')
+        #     playwright_audio = _playwright_download_audio(url, tmpdir)
+        #     if playwright_audio:
+        #         return _analyze_audio(playwright_audio, title=title, artist=artist)
+        # except Exception as e:
+        #     sys.stderr.write(f'[analyze_url] Playwright browser fallback raised: {e}\n')
+        #
+        # # ── Strategy 5: yt-dlp with multiple clients ────────────────────────
+        # try:
+        #     import yt_dlp as _yt
+        # except ImportError:
+        #     return {"success": False, "error": "No se pudo obtener el audio (yt-dlp no instalado, Cobalt, Piped y Playwright fallaron)."}
+        #
+        # configured_clients = _parse_player_clients(os.environ.get('YTDLP_PLAYER_CLIENTS', ''))
+        # if configured_clients:
+        #     yt_strategies = [[client] for client in configured_clients]
+        # elif cookies_file:
+        #     yt_strategies = [['web'], ['android'], ['ios'], ['tv_embedded']]
+        # else:
+        #     yt_strategies = [['android'], ['ios'], ['android_embedded'], ['tv_embedded']]
+        #
+        # audio_path = None
+        # for clients in yt_strategies:
+        #     sys.stderr.write(f'[analyze_url] trying yt-dlp {clients}...\n')
+        #     subdir = tempfile.mkdtemp(dir=tmpdir)
+        #     audio_path = _ytdlp_download(url, subdir, clients, cookies_file)
+        #     if audio_path:
+        #         break
+        #
+        # if not audio_path:
+        #     has_cookies = cookies_file is not None
+        #     if has_cookies:
+        #         msg = (
+        #             "YouTube bloqueó la descarga incluso con cookies. "
+        #             "Las cookies pueden haber expirado — exporta unas nuevas y actualiza YOUTUBE_COOKIES_B64 en Railway."
+        #         )
+        #     else:
+        #         msg = (
+        #             "YouTube bloquea las descargas desde servidores (detección de bots). "
+        #             "Prueba un extractor remoto con REMOTE_EXTRACTOR_URL o exporta cookies de YouTube "
+        #             "y agrega la variable YOUTUBE_COOKIES_B64 en Railway. Instrucciones en los logs del servidor."
+        #         )
+        #     sys.stderr.write('[analyze_url] ALL strategies failed\n')
+        #     sys.stderr.write('=' * 60 + '\n')
+        #     sys.stderr.write('SOLUCIÓN: Configurar cookies de YouTube en Railway\n')
+        #     sys.stderr.write('1. Instalar extensión: "Get cookies.txt LOCALLY" (Chrome/Firefox)\n')
+        #     sys.stderr.write('2. Ir a youtube.com con sesión iniciada\n')
+        #     sys.stderr.write('3. Exportar cookies.txt con la extensión\n')
+        #     sys.stderr.write('4. Codificar en base64:\n')
+        #     sys.stderr.write('   Linux/Mac: base64 -w 0 cookies.txt\n')
+        #     sys.stderr.write('   Windows PowerShell: [Convert]::ToBase64String([IO.File]::ReadAllBytes("cookies.txt"))\n')
+        #     sys.stderr.write('5. En Railway > Variables: YOUTUBE_COOKIES_B64 = <resultado del paso 4>\n')
+        #     sys.stderr.write('=' * 60 + '\n')
+        #     return {"success": False, "error": msg}
+        #
+        # return _analyze_audio(audio_path, title=title, artist=artist)
 
 
 def _fetch_metadata(url, cookies_file=None):
