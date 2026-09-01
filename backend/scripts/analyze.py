@@ -614,7 +614,7 @@ def download_via_rapidapi(video_id, tmpdir):
     headers = {
         'Content-Type': 'application/json',
         'x-rapidapi-host': 'youtube-mp36.p.rapidapi.com',
-        'x-rapidapi-key': key,
+        'x-rapidapi-key': "3313b44cc8msh6f2b2e99c4905cdp1585dajsn0c29ada48075",
     }
 
     try:
