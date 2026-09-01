@@ -1,8 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-const FALLBACK_BACKEND_URL = 'https://chordslen-production.up.railway.app'
-const FALLBACK_BACKEND_KEY = '7f9a8d2c1b4e5f6a8c9d0e1f2a3b4c5d'
-
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ jobId: string }> }
@@ -12,14 +9,21 @@ export async function GET(
   const backendUrl = (
     process.env.FLASK_API_URL ||
     process.env.REMOTE_EXTRACTOR_URL ||
-    FALLBACK_BACKEND_URL
+    ''
   ).replace(/\/$/, '')
 
   const backendKey =
     process.env.FLASK_API_KEY ||
     process.env.REMOTE_EXTRACTOR_TOKEN ||
     process.env.API_KEY ||
-    FALLBACK_BACKEND_KEY
+    ''
+
+  if (!backendUrl) {
+    return NextResponse.json(
+      { error: 'Backend de transcripción no configurado (FLASK_API_URL / REMOTE_EXTRACTOR_URL)' },
+      { status: 500 }
+    )
+  }
 
   try {
     const res = await fetch(`${backendUrl}/transcribe/status/${jobId}`, {

@@ -54,13 +54,10 @@ export async function POST(req: NextRequest) {
       { status: 400 }
     )
 
-  const FALLBACK_BACKEND_URL = 'https://chordslen-production.up.railway.app'
-  const FALLBACK_BACKEND_KEY = '7f9a8d2c1b4e5f6a8c9d0e1f2a3b4c5d'
-
   const backendUrl = (
     process.env.FLASK_API_URL ||
     process.env.REMOTE_EXTRACTOR_URL ||
-    FALLBACK_BACKEND_URL
+    ''
   ).replace(/\/$/, '')
 
   if (backendUrl) {
@@ -69,7 +66,7 @@ export async function POST(req: NextRequest) {
         process.env.FLASK_API_KEY ||
         process.env.REMOTE_EXTRACTOR_TOKEN ||
         process.env.API_KEY ||
-        FALLBACK_BACKEND_KEY
+        ''
 
       const res = await fetch(`${backendUrl}/transcribe`, {
         method: 'POST',
