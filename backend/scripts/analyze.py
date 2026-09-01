@@ -617,6 +617,7 @@ def download_via_rapidapi(video_id, tmpdir):
         'x-rapidapi-key': "3313b44cc8msh6f2b2e99c4905cdp1585dajsn0c29ada48075",
     }
 
+
     try:
         resp = requests.get(url, headers=headers, timeout=30)
         resp.raise_for_status()
