@@ -16,7 +16,7 @@ import { AnalysisResult, TranscriptionResult } from '@/lib/types'
 import { transposeChord } from '@/lib/transpose'
 
 class AnalysisError extends Error {
-  constructor(message: string, public fallback?: string) {
+  constructor(message: string, public fallback?: string, public code?: string) {
     super(message)
   }
 }
@@ -55,6 +55,7 @@ export default function Home() {
   const [analyzedUrl, setAnalyzedUrl] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [uploadSuggested, setUploadSuggested] = useState(false)
+  const [cookiesNeedUpdate, setCookiesNeedUpdate] = useState(false)
   const [currentTime, setCurrentTime] = useState(-1)
   const [capo, setCapo] = useState(0)
   const [shift, setShift] = useState(0)
@@ -80,7 +81,7 @@ export default function Home() {
 
       if (!res.ok || data.status === 'failed' || data.success === false) {
         throw new AnalysisError(
-          data.error || 'Error al consultar el estado del trabajo', data.fallback
+          data.error || 'Error al consultar el estado del trabajo', data.fallback, data.code
         )
       }
 
@@ -96,6 +97,7 @@ export default function Home() {
     if (!url.trim()) return
     setError(null)
     setUploadSuggested(false)
+    setCookiesNeedUpdate(false)
     setResult(null)
     setAnalyzedUrl(null)
     setAnalyzedFile(null)
@@ -144,7 +146,7 @@ export default function Home() {
       }
 
       if (!res.ok || data.error || data.success === false) {
-        throw new AnalysisError(data.error || 'Error desconocido', data.fallback)
+        throw new AnalysisError(data.error || 'Error desconocido', data.fallback, data.code)
       }
       if (
         !data ||
@@ -165,6 +167,7 @@ export default function Home() {
       clearTimeout(t3)
       setError(err instanceof Error ? err.message : 'Error de red')
       setUploadSuggested(err instanceof AnalysisError && err.fallback === 'upload')
+      setCookiesNeedUpdate(err instanceof AnalysisError && !!err.code?.startsWith('YOUTUBE_COOKIES_'))
       setStep(null)
     }
   }
@@ -173,6 +176,7 @@ export default function Home() {
     if (!selectedFile) return
     setError(null)
     setUploadSuggested(false)
+    setCookiesNeedUpdate(false)
     setResult(null)
     setAnalyzedUrl(null)
     setAnalyzedFile(null)
@@ -241,6 +245,7 @@ export default function Home() {
     setCurrentTime(-1)
     setError(null)
     setUploadSuggested(false)
+    setCookiesNeedUpdate(false)
     setCapo(0)
     setShift(0)
     setSoloRange(null)
@@ -305,6 +310,13 @@ export default function Home() {
   return (
     <div className="min-h-screen text-white flex flex-col">
       <main className="flex-1">
+        {result?.warnings?.filter((warning) => warning.code.startsWith('YOUTUBE_COOKIES_')).map((warning) => (
+          <div key={warning.code} role="alert" className="mx-auto mt-6 max-w-3xl rounded-xl border border-yellow-400/30 bg-yellow-400/10 px-4 py-3 text-sm text-yellow-200">
+            <p className="mb-1 font-semibold">Actualizar cookies de YouTube</p>
+            <p>{warning.message}</p>
+            <p className="mt-2">El análisis pudo completarse, pero debes renovar la sesión para próximas descargas.</p>
+          </div>
+        ))}
         {/* ════════════════════════════════════
             LANDING — sin resultados
         ════════════════════════════════════ */}
@@ -391,11 +403,12 @@ export default function Home() {
                   {step !== null && <ProgressSteps currentStep={step} />}
                   {error && (
                     <div role="alert" className="text-sm text-red-400 bg-red-950/40 border border-red-900/50 rounded-xl px-4 py-3 text-left">
+                      {cookiesNeedUpdate && <p className="mb-1 font-semibold">Actualizar cookies de YouTube</p>}
                       <p>{error}</p>
                       {uploadSuggested && inputMode === 'url' && (
                         <button
                           type="button"
-                          onClick={() => { setInputMode('file'); setError(null); setUploadSuggested(false) }}
+                          onClick={() => { setInputMode('file'); setError(null); setUploadSuggested(false); setCookiesNeedUpdate(false) }}
                           className="mt-3 rounded-lg bg-yellow-400 px-4 py-2 font-semibold text-gray-950"
                         >
                           Continuar con un archivo de audio

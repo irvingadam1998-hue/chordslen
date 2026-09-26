@@ -231,15 +231,17 @@ def _serve_download(fragment=False):
         return _error('Selecciona un fragmento válido de hasta 60 segundos.')
     workdir = Path(tempfile.mkdtemp(prefix='audio-', dir=TMP_ROOT))
     try:
-        path, title, artist = download_audio(data.get('url'), workdir, start, end)
+        notices = []
+        path, title, artist = download_audio(data.get('url'), workdir, start, end, notices=notices)
         file_id = uuid.uuid4().hex
         with _file_lock:
             _file_index[file_id] = (path, time.time() + TTL_SECONDS)
         return jsonify({'success': True, 'audio_url': request.url_root.rstrip('/') + f'/files/{file_id}',
-                        'title': title, 'artist': artist, 'ext': Path(path).suffix.lstrip('.')})
+                        'title': title, 'artist': artist, 'ext': Path(path).suffix.lstrip('.'),
+                        'warnings': notices})
     except YouTubeError as exc:
         shutil.rmtree(workdir, ignore_errors=True)
-        return jsonify(exc.result()), 503 if exc.code == 'YOUTUBE_BLOCKED' else 400
+        return jsonify(exc.result()), 503 if exc.retry_after or exc.code.startswith('YOUTUBE_COOKIES_') else 400
     except Exception:
         shutil.rmtree(workdir, ignore_errors=True)
         app.logger.exception('Audio extraction failed')

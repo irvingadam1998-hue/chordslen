@@ -495,8 +495,12 @@ def analyze_file_path(path):
 def analyze_url(url):
     try:
         with tempfile.TemporaryDirectory(prefix='chordlens_analysis_') as tmpdir:
-            audio_path, title, artist = download_audio(url, tmpdir)
-            return _analyze_audio(audio_path, title=title, artist=artist)
+            notices = []
+            audio_path, title, artist = download_audio(url, tmpdir, notices=notices)
+            result = _analyze_audio(audio_path, title=title, artist=artist)
+            if notices:
+                result['warnings'] = notices
+            return result
     except YouTubeError as exc:
         return exc.result()
 

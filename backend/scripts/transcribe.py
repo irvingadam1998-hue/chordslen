@@ -158,7 +158,8 @@ def detect_notes_librosa(audio_path: str) -> list:
 def transcribe(url: str, start: float, end: float) -> dict:
     tmpdir = tempfile.mkdtemp(prefix='chordlens_transcribe_')
     try:
-        audio_path, _, _ = download_audio(url, tmpdir, start, end)
+        notices = []
+        audio_path, _, _ = download_audio(url, tmpdir, start, end, notices=notices)
         fragment_duration = end - start
 
         print(f"[transcribe] audio={os.path.basename(audio_path)}, size={os.path.getsize(audio_path)} bytes", file=sys.stderr)
@@ -170,6 +171,7 @@ def transcribe(url: str, start: float, end: float) -> dict:
         if not notes_raw:
             return {
                 'success': False,
+                'warnings': notices,
                 'error': (
                     'No se detectaron notas melódicas en el fragmento. '
                     'pyin no encontró pitch claro — puede ser que la guitarra tenga mucha distorsión, '
@@ -200,6 +202,7 @@ def transcribe(url: str, start: float, end: float) -> dict:
             'tab': tab,
             'duration': fragment_duration,
             'bpm': bpm,
+            'warnings': notices,
         }
 
     except YouTubeError as exc:

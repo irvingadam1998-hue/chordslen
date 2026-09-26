@@ -36,4 +36,5 @@ export interface AnalysisResult {
   title?: string
   artist?: string
   error?: string
+  warnings?: { code: string; message: string }[]
 }

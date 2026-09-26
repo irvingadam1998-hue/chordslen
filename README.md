@@ -44,3 +44,6 @@ configura `PUBLIC_WORKER_URL` con la dirección pública del worker.
 Consulta [DEPLOYMENT.md](DEPLOYMENT.md) para publicar en Render sin proveedores
 de descarga de pago. Ninguna configuración puede garantizar que YouTube acepte
 siempre la IP del servidor; el análisis de archivos no depende de YouTube.
+
+- [Frontend en Vercel: paso a paso](DESPLIEGUE_VERCEL.md).
+- [Exportar cookies y saber cuándo renovarlas](COOKIES_YOUTUBE.md).

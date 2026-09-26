@@ -62,6 +62,32 @@ class WorkerTests(unittest.TestCase):
             self.assertEqual(response.json['fallback'], 'upload')
             self.assertEqual(response.headers['Retry-After'], '900')
 
+    def test_cookie_error_reaches_frontend_through_analysis_job(self):
+        import analyze
+        error = worker.YouTubeError('Las cookies han vencido. Actualiza cookies.txt.', 'YOUTUBE_COOKIES_EXPIRED')
+        with patch.object(analyze, 'download_audio', side_effect=error), \
+             patch.object(worker, '_launch', side_effect=worker._run_job):
+            response = self.client.post('/analyze', json={'url': 'https://youtu.be/abcdefghijk'}, headers=self.auth)
+        self.assertEqual(response.json['code'], 'YOUTUBE_COOKIES_EXPIRED')
+        self.assertEqual(response.json['fallback'], 'upload')
+        poll = self.client.get('/status/' + response.json['job_id'], headers=self.auth)
+        self.assertEqual(poll.json['error'], str(error))
+        self.assertEqual(poll.json['code'], 'YOUTUBE_COOKIES_EXPIRED')
+
+    def test_successful_analysis_preserves_cookie_warning_on_poll(self):
+        import analyze
+        warning = {'code': 'YOUTUBE_COOKIES_INVALID', 'message': 'Actualiza las cookies.'}
+        def download(url, workdir, *, notices):
+            notices.append(warning)
+            return 'mock.wav', 'Title', 'Artist'
+        with patch.object(analyze, 'download_audio', side_effect=download), \
+             patch.object(analyze, '_analyze_audio', return_value={'success': True, 'chords_timeline': []}), \
+             patch.object(worker, '_launch', side_effect=worker._run_job):
+            response = self.client.post('/analyze', json={'url': 'https://youtu.be/abcdefghijk'}, headers=self.auth)
+        poll = self.client.get('/status/' + response.json['job_id'], headers=self.auth)
+        self.assertEqual(poll.json['status'], 'done')
+        self.assertEqual(poll.json['warnings'], [warning])
+
     def test_large_upload_reaches_analysis_without_youtube_and_is_deleted(self):
         token = self.ticket()
         headers = {'Origin': self.origin, 'X-Upload-Token': token}

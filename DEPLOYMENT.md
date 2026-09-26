@@ -25,6 +25,8 @@ versión actualizada de yt-dlp seleccione sus clientes predeterminados.
 
 ## Frontend
 
+Paso a paso en [DESPLIEGUE_VERCEL.md](DESPLIEGUE_VERCEL.md).
+
 Despliega `frontend` como proyecto Next.js. En sus variables configura:
 
 ```env
@@ -62,13 +64,56 @@ en el frontend, aunque se recomienda usar los nombres `FLASK_API_*`.
 
 ## Cookies y bloqueos
 
-No hace falta iniciar sesión en Gmail para analizar videos públicos. Si un video
-necesita autenticación y tienes acceso a él, el worker admite cookies de YouTube.
+Exportación, renovación y significado de los nuevos avisos:
+[COOKIES_YOUTUBE.md](COOKIES_YOUTUBE.md).
+
+Los videos públicos pueden funcionar sin iniciar sesión, pero YouTube puede
+exigir autenticación a determinadas sesiones o servidores. El worker admite
+cookies de YouTube para probar una sesión autenticada.
 Se copian a un archivo temporal privado por descarga y se eliminan al terminar.
 No subas cookies al repositorio ni al frontend. Una sesión iniciada no garantiza
 eliminar un bloqueo de la IP; las cookies también caducan y su uso puede afectar
 la cuenta. La guía oficial de yt-dlp explica la exportación y sus limitaciones:
 https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies
+
+### Si Render muestra "Sign in to confirm you’re not a bot"
+
+La descarga del mismo video desde otra computadora solo confirma que ese entorno
+puede obtenerlo. No demuestra que la sesión o la IP de Render sea aceptada.
+El soporte de cookies ya existe: esta prueba no necesita cambios de código.
+
+1. En una ventana de incógnito, inicia sesión en YouTube con una cuenta destinada
+   a esta aplicación. Según yt-dlp, usar una cuenta para descargar puede ocasionar
+   restricciones; evita exponer tu cuenta principal.
+2. En esa misma pestaña abre `https://www.youtube.com/robots.txt`. Exporta solo
+   las cookies de `youtube.com` en formato Netscape a `cookies.txt`, siguiendo la
+   guía oficial enlazada arriba, y cierra la ventana de incógnito. La guía explica
+   qué extensiones permiten exportar esa sesión privada. No uses la exportación
+   de todas las cookies del navegador: puede incluir sesiones de otros sitios.
+3. En el **servicio backend de Render**, abre **Environment → Secret Files →
+   Add Secret File**. Usa el nombre `cookies.txt` y pega allí su contenido.
+4. En **Environment Variables**, configura:
+
+   ```env
+   YOUTUBE_COOKIES_FILE=/etc/secrets/cookies.txt
+   ```
+
+   Elimina `YOUTUBE_COOKIES_B64` si estaba configurada: tiene prioridad sobre el
+   archivo y podría seguir usando cookies antiguas. Deja sin configurar
+   `YTDLP_PLAYER_CLIENTS` y `YTDLP_PO_TOKEN` para esta prueba; no fuerces clientes
+   antiguos que no admiten cookies de cuenta.
+5. Guarda los cambios y aplica tú el nuevo despliegue. Render monta los archivos
+   secretos en `/etc/secrets`. El proceso nuevo empieza sin la pausa anterior;
+   si mantienes el proceso en ejecución, respeta la pausa de 15 minutos tras el
+   rechazo antes de volver a probar.
+6. Prueba una vez el mismo video. Si aparecen avisos de cookies caducadas o
+   rotadas, vuelve a exportar la sesión. Si el rechazo continúa con cookies
+   válidas, autenticar la cuenta no ha sido suficiente; no se puede prometer una
+   solución permanente mediante cookies en esa IP de Render.
+
+No pegues el contenido de las cookies en chats, incidencias ni logs: da acceso a
+la sesión. Tampoco lo incluyas en el frontend ni en Git. Los archivos secretos
+de Render se describen en su [documentación oficial](https://render.com/docs/configure-environment-variables#secret-files).
 
 No se instala un generador de PO tokens ni se fuerza un token estático. Los tokens
 pueden estar ligados a un video y caducar; una variable fija no es una solución
@@ -77,8 +122,9 @@ permanente. Los ajustes avanzados `YTDLP_PLAYER_CLIENTS`, `YTDLP_PO_TOKEN` y
 
 Cuando aparece un rechazo, se pausa YouTube y la interfaz permite continuar con
 un archivo local. Los resultados existentes siguen disponibles durante la pausa.
-Los errores de red, configuración y videos privados no se anuncian como una
-solicitud de cookies.
+Los avisos de cookies distinguen vencimiento por fecha, invalidación de sesión,
+rechazo con cookies configuradas y archivo mal configurado. Los errores de red,
+otros errores de configuración y videos privados no se anuncian como vencimiento.
 
 ## Verificación
 

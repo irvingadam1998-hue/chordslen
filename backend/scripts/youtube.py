@@ -25,7 +25,69 @@ class YouTubeError(RuntimeError):
 
 _download_lock = threading.Lock()
 _blocked_until = 0.0
+_blocked_error = None
 _last_download = 0.0
+
+COOKIE_UPDATE = 'Vuelve a exportar cookies.txt y reemplázalo en los archivos secretos del backend de Render.'
+COOKIE_INVALID = 'YouTube indica que las cookies de la cuenta ya no son válidas. ' + COOKIE_UPDATE
+
+
+def cookies_invalid(message):
+    message = str(message).lower()
+    return any(term in message for term in (
+        'cookies are no longer valid', 'cookies have expired',
+        'cookies are expired', 'cookies have been rotated',
+    ))
+
+
+class DownloadLogger:
+    """Keep the actionable diagnostic even when yt-dlp only emits a warning."""
+    def __init__(self):
+        self.invalid_cookies = False
+
+    def debug(self, message):
+        pass
+
+    def warning(self, message):
+        self.invalid_cookies |= cookies_invalid(message)
+
+    def error(self, message):
+        self.warning(message)
+
+
+def validate_cookies(path):
+    """Check Netscape dates without exposing cookie values or assuming a fixed lifetime."""
+    content = path.read_text(encoding='utf-8')
+    if not content.splitlines() or content.splitlines()[0] not in ('# Netscape HTTP Cookie File', '# HTTP Cookie File'):
+        raise ValueError('Invalid cookie file header')
+    groups = {'session': [], 'login': []}
+    found = False
+    for line in content.splitlines():
+        if line.startswith('#HttpOnly_'):
+            line = line[len('#HttpOnly_'):]
+        if not line.strip() or line.startswith('#'):
+            continue
+        fields = line.split('\t')
+        if (len(fields) != 7 or not re.fullmatch(r'(?:[0-9]+(?:\.[0-9]+)?)?', fields[4])
+                or fields[1] not in ('TRUE', 'FALSE') or fields[3] not in ('TRUE', 'FALSE')
+                or (fields[1] == 'TRUE') != fields[0].startswith('.')):
+            raise ValueError('Invalid Netscape cookie row')
+        domain, _, path_value, _, expires, name, value = fields
+        if domain.lstrip('.') not in ('youtube.com', 'www.youtube.com') or path_value != '/':
+            continue
+        found = True
+        # yt-dlp treats both 0 and an empty expiry as session cookies.
+        expiration = float(expires or 0)
+        expired = expiration > 0 and expiration <= time.time()
+        group = ('session' if name in ('SAPISID', '__Secure-1PAPISID', '__Secure-3PAPISID')
+                 else 'login' if name == 'LOGIN_INFO' else None)
+        if group and value:
+            groups[group].append(expired)
+    if not found:
+        raise ValueError('No YouTube cookies')
+    if any(expirations and all(expirations) for expirations in groups.values()):
+        raise YouTubeError('Las cookies de inicio de sesión de YouTube han vencido. ' + COOKIE_UPDATE,
+                           'YOUTUBE_COOKIES_EXPIRED')
 
 
 def extract_video_id(url):
@@ -65,8 +127,20 @@ def cooldown_remaining():
     return max(0, math.ceil(_blocked_until - time.monotonic()))
 
 
-def classify_error(error):
+def classify_error(error, *, cookies_configured=False, invalid_cookies=False):
     message = str(error).lower()
+    cooldown = int(os.environ.get('YOUTUBE_COOLDOWN_SECONDS', '900'))
+    if invalid_cookies or cookies_invalid(message):
+        return YouTubeError(COOKIE_INVALID, 'YOUTUBE_COOKIES_INVALID', cooldown)
+    if cookies_configured and any(term in message for term in (
+        'not a bot', 'confirm you’re not', "confirm you're not",
+    )):
+        return YouTubeError(
+            'YouTube pide verificar la sesión aunque hay cookies configuradas. ' + COOKIE_UPDATE +
+            ' Si el aviso continúa con cookies nuevas, puede ser un bloqueo de la IP del servidor; '
+            'este rechazo no confirma que hayan vencido.',
+            'YOUTUBE_COOKIES_REJECTED', cooldown,
+        )
     if any(term in message for term in (
         'not a bot', 'confirm you’re not', "confirm you're not", 'http error 429',
         'too many requests', "this content isn't available, try again later",
@@ -75,7 +149,7 @@ def classify_error(error):
         return YouTubeError(
             'YouTube está rechazando las solicitudes desde este servidor. '
             'Puedes continuar subiendo el archivo de audio.',
-            'YOUTUBE_BLOCKED', int(os.environ.get('YOUTUBE_COOLDOWN_SECONDS', '900')),
+            'YOUTUBE_BLOCKED', cooldown,
         )
     if any(term in message for term in ('private video', 'video unavailable', 'video is unavailable', 'removed', 'age-restricted', 'sign in to confirm your age')):
         return YouTubeError('Este video no está disponible para el análisis. Puedes subir un archivo de audio.')
@@ -133,15 +207,21 @@ def build_options(workdir):
             shutil.copyfile(configured, cookie_path)
         if encoded or configured:
             cookie_path.chmod(0o600)
+            validate_cookies(cookie_path)
             options['cookiefile'] = str(cookie_path)
-    except (ValueError, OSError) as exc:
-        raise YouTubeError('La configuración de cookies del servidor no es válida.', 'EXTRACTOR_CONFIG') from exc
+    except YouTubeError:
+        cookie_path.unlink(missing_ok=True)
+        raise
+    except (ValueError, OSError):
+        cookie_path.unlink(missing_ok=True)
+        raise YouTubeError('No se pudo leer un archivo válido de cookies de YouTube. ' + COOKIE_UPDATE,
+                           'YOUTUBE_COOKIES_CONFIG') from None
     return options
 
 
-def download_audio(url, workdir, start=None, end=None):
+def download_audio(url, workdir, start=None, end=None, *, notices=None):
     """Download once, returning audio and metadata from the same extraction."""
-    global _blocked_until, _last_download
+    global _blocked_until, _blocked_error, _last_download
     import yt_dlp
 
     video_id = extract_video_id(url)
@@ -155,11 +235,15 @@ def download_audio(url, workdir, start=None, end=None):
     with _download_lock:
         remaining = cooldown_remaining()
         if remaining:
+            if _blocked_error is not None:
+                raise YouTubeError(str(_blocked_error), _blocked_error.code, remaining)
             raise YouTubeError(
                 'YouTube está rechazando las solicitudes. Puedes continuar subiendo el archivo de audio.',
                 'YOUTUBE_BLOCKED', remaining,
             )
         options = build_options(workdir)
+        logger = DownloadLogger()
+        options['logger'] = logger
         if start is not None:
             options['download_ranges'] = yt_dlp.utils.download_range_func(None, [(start, end)])
         delay = float(os.environ.get('YOUTUBE_MIN_INTERVAL_SECONDS', '5'))
@@ -171,11 +255,15 @@ def download_audio(url, workdir, start=None, end=None):
             if not files:
                 raise YouTubeError('La descarga no produjo un archivo de audio.')
             audio = next((p for p in files if p.suffix == '.wav'), files[0])
+            if logger.invalid_cookies and notices is not None:
+                notices.append({'code': 'YOUTUBE_COOKIES_INVALID', 'message': COOKIE_INVALID})
             return str(audio), info.get('title', ''), info.get('artist') or info.get('creator') or info.get('uploader', '')
         except yt_dlp.utils.DownloadError as exc:
-            error = classify_error(exc)
-            if error.code == 'YOUTUBE_BLOCKED':
+            error = classify_error(exc, cookies_configured='cookiefile' in options,
+                                   invalid_cookies=logger.invalid_cookies)
+            if error.retry_after:
                 _blocked_until = time.monotonic() + error.retry_after
+                _blocked_error = error
             raise error from exc
         finally:
             _last_download = time.monotonic()

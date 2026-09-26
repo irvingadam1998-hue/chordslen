@@ -14,9 +14,11 @@ def main():
     args = parser.parse_args()
     try:
         with tempfile.TemporaryDirectory(prefix='chordlens_check_') as directory:
-            path, title, _ = download_audio(args.url, directory)
+            notices = []
+            path, title, _ = download_audio(args.url, directory, notices=notices)
             result = {'success': True, 'title': title, 'bytes': Path(path).stat().st_size,
-                      'yt_dlp': version('yt-dlp'), 'ejs': version('yt-dlp-ejs')}
+                      'yt_dlp': version('yt-dlp'), 'ejs': version('yt-dlp-ejs'),
+                      'warnings': notices}
     except YouTubeError as exc:
         result = exc.result()
     print(json.dumps(result, ensure_ascii=False))
