@@ -151,6 +151,7 @@ se incluyen estos tiempos, en segundos:
 | Campo | Qué mide |
 | --- | --- |
 | `download_seconds` | Preparación y descarga de YouTube, incluida la conversión de audio y cualquier espera del descargador. |
+| `initialization_seconds` | Importaciones e inicialización de las librerías antes de leer el audio. |
 | `load_seconds` | Lectura y conversión del audio para el análisis. |
 | `features_seconds` | Separación armónica y cálculo de características musicales. |
 | `chords_seconds` | Identificación de acordes y construcción de la línea de tiempo. |
@@ -173,6 +174,21 @@ a 15.47 s**. Coincidieron los 30 eventos de acordes, sus tiempos y la tonalidad.
 Estas cifras describen esa prueba local; no incluyen YouTube ni garantizan el
 mismo tiempo en Render. Para aplicar la optimización, publica el backend con
 `backend/requirements.txt` actualizado (SciPy 1.17+).
+
+El Dockerfile también ejecuta `warm_audio.py` durante el build con un audio
+sintético de tres segundos. Esto prepara una caché de Numba dentro de la imagen
+(`NUMBA_CACHE_DIR=/opt/chordlens/numba-cache`) con `NUMBA_CPU_NAME=generic`,
+para reutilizarla aunque el host del build y el de ejecución tengan CPU distintas
+de la misma arquitectura. No descarga videos ni utiliza las cookies. La
+[documentación de Numba](https://numba.readthedocs.io/en/stable/reference/envvars.html#numba-cpu-name)
+describe esta opción de portabilidad.
+
+La preparación se hace al construir, no al arrancar el servicio. Reduce la
+necesidad de compilar funciones en el primer análisis; todavía quedan importaciones,
+lectura, remuestreo y cálculo. Antes de este desglose, `load_seconds` incluía también
+las importaciones diferidas de librosa. Un valor alto en esa métrica antigua no
+demuestra por sí solo que leer el archivo sea lento. Este ajuste necesita un nuevo
+build del backend; cambiar solo variables o reiniciar la imagen anterior no lo aplica.
 
 Si solo la primera canción tarda más, considera el arranque del servicio:
 [Render Free](https://render.com/docs/free#spinning-down-on-idle) se suspende

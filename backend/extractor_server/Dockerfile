@@ -8,7 +8,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certi
 WORKDIR /app
 COPY backend/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
+ENV NUMBA_CPU_NAME=generic \
+    NUMBA_CACHE_DIR=/opt/chordlens/numba-cache
 COPY backend/scripts ./scripts
+# Cache is baked into the image, so a free instance restart does not discard it.
+# Generic CPU code can be reused on build/runtime hosts with different CPU models.
+RUN python scripts/warm_audio.py
 COPY backend/extractor_server ./extractor_server
 WORKDIR /app/extractor_server
 ENV PORT=5002

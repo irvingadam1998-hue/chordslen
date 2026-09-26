@@ -289,10 +289,13 @@ def _analyze_audio(audio_path, title='', artist=''):
     templates = make_chord_templates()
 
     MAX_DURATION = 360
-    load_started = perf_counter()
     try:
+        # Accessing librosa.load triggers lazy imports and Numba initialization.
+        # Measure that separately from actually decoding/resampling the file.
+        load_audio = librosa.load
+        load_started = perf_counter()
         sys.stderr.write('[analyze] loading audio with librosa...\n')
-        y, sr = librosa.load(audio_path, sr=22050, mono=True, duration=MAX_DURATION)
+        y, sr = load_audio(audio_path, sr=22050, mono=True, duration=MAX_DURATION)
         sys.stderr.write(f'[analyze] loaded audio: samples={len(y)}, sr={sr}\n')
     except Exception as e:
         return {"success": False, "error": f"Error al cargar el audio: {str(e)}"}
@@ -463,6 +466,7 @@ def _analyze_audio(audio_path, title='', artist=''):
 
     finished = perf_counter()
     timings = {
+        'initialization_seconds': round(load_started - analysis_started, 3),
         'load_seconds': round(features_started - load_started, 3),
         'features_seconds': round(chords_started - features_started, 3),
         'chords_seconds': round(finished - chords_started, 3),
