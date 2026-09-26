@@ -16,7 +16,11 @@ import { AnalysisResult, TranscriptionResult } from '@/lib/types'
 import { transposeChord } from '@/lib/transpose'
 
 class AnalysisError extends Error {
-  constructor(message: string, public fallback?: string, public code?: string) {
+  constructor(
+    message: string,
+    public fallback?: string,
+    public code?: string
+  ) {
     super(message)
   }
 }
@@ -25,7 +29,11 @@ function extractVideoId(url: string): string | null {
   try {
     const parsed = new URL(url)
     if (parsed.hostname === 'youtu.be') return parsed.pathname.slice(1)
-    return parsed.searchParams.get('v') || parsed.pathname.match(/^\/(?:shorts|embed|live)\/([\w-]{11})/)?.[1] || null
+    return (
+      parsed.searchParams.get('v') ||
+      parsed.pathname.match(/^\/(?:shorts|embed|live)\/([\w-]{11})/)?.[1] ||
+      null
+    )
   } catch {
     return null
   }
@@ -81,7 +89,9 @@ export default function Home() {
 
       if (!res.ok || data.status === 'failed' || data.success === false) {
         throw new AnalysisError(
-          data.error || 'Error al consultar el estado del trabajo', data.fallback, data.code
+          data.error || 'Error al consultar el estado del trabajo',
+          data.fallback,
+          data.code
         )
       }
 
@@ -146,7 +156,11 @@ export default function Home() {
       }
 
       if (!res.ok || data.error || data.success === false) {
-        throw new AnalysisError(data.error || 'Error desconocido', data.fallback, data.code)
+        throw new AnalysisError(
+          data.error || 'Error desconocido',
+          data.fallback,
+          data.code
+        )
       }
       if (
         !data ||
@@ -166,8 +180,13 @@ export default function Home() {
       clearTimeout(t2)
       clearTimeout(t3)
       setError(err instanceof Error ? err.message : 'Error de red')
-      setUploadSuggested(err instanceof AnalysisError && err.fallback === 'upload')
-      setCookiesNeedUpdate(err instanceof AnalysisError && !!err.code?.startsWith('YOUTUBE_COOKIES_'))
+      setUploadSuggested(
+        err instanceof AnalysisError && err.fallback === 'upload'
+      )
+      setCookiesNeedUpdate(
+        err instanceof AnalysisError &&
+          !!err.code?.startsWith('YOUTUBE_COOKIES_')
+      )
       setStep(null)
     }
   }
@@ -192,11 +211,16 @@ export default function Home() {
     const t3 = setTimeout(() => setStep(3), 4000)
 
     try {
-      const ticketResponse = await fetch('/api/analyze-file', { method: 'POST' })
+      const ticketResponse = await fetch('/api/analyze-file', {
+        method: 'POST',
+      })
       const ticket = await ticketResponse.json()
-      if (!ticketResponse.ok) throw new Error(ticket.error || 'No se pudo iniciar la subida.')
+      if (!ticketResponse.ok)
+        throw new Error(ticket.error || 'No se pudo iniciar la subida.')
       if (selectedFile.size > ticket.maxBytes) {
-        throw new Error(`El archivo supera el límite de ${Math.floor(ticket.maxBytes / 1024 / 1024)} MB.`)
+        throw new Error(
+          `El archivo supera el límite de ${Math.floor(ticket.maxBytes / 1024 / 1024)} MB.`
+        )
       }
       const formData = new FormData()
       formData.append('audio', selectedFile)
@@ -310,13 +334,24 @@ export default function Home() {
   return (
     <div className="min-h-screen text-white flex flex-col">
       <main className="flex-1">
-        {result?.warnings?.filter((warning) => warning.code.startsWith('YOUTUBE_COOKIES_')).map((warning) => (
-          <div key={warning.code} role="alert" className="mx-auto mt-6 max-w-3xl rounded-xl border border-yellow-400/30 bg-yellow-400/10 px-4 py-3 text-sm text-yellow-200">
-            <p className="mb-1 font-semibold">Actualizar cookies de YouTube</p>
-            <p>{warning.message}</p>
-            <p className="mt-2">El análisis pudo completarse, pero debes renovar la sesión para próximas descargas.</p>
-          </div>
-        ))}
+        {result?.warnings
+          ?.filter((warning) => warning.code.startsWith('YOUTUBE_COOKIES_'))
+          .map((warning) => (
+            <div
+              key={warning.code}
+              role="alert"
+              className="mx-auto mt-6 max-w-3xl rounded-xl border border-yellow-400/30 bg-yellow-400/10 px-4 py-3 text-sm text-yellow-200"
+            >
+              <p className="mb-1 font-semibold">
+                Actualizar cookies de YouTube
+              </p>
+              <p>{warning.message}</p>
+              <p className="mt-2">
+                El análisis pudo completarse, pero debes renovar la sesión para
+                próximas descargas.
+              </p>
+            </div>
+          ))}
         {/* ════════════════════════════════════
             LANDING — sin resultados
         ════════════════════════════════════ */}
@@ -331,7 +366,7 @@ export default function Home() {
                 </div>
 
                 <h1 className="text-5xl sm:text-7xl font-black tracking-tighter leading-none">
-                  Descubre los acordes
+                  Descubre los acordesx3
                   <br />
                   <span className="text-yellow-400">de cualquier canción</span>
                 </h1>
@@ -402,13 +437,25 @@ export default function Home() {
 
                   {step !== null && <ProgressSteps currentStep={step} />}
                   {error && (
-                    <div role="alert" className="text-sm text-red-400 bg-red-950/40 border border-red-900/50 rounded-xl px-4 py-3 text-left">
-                      {cookiesNeedUpdate && <p className="mb-1 font-semibold">Actualizar cookies de YouTube</p>}
+                    <div
+                      role="alert"
+                      className="text-sm text-red-400 bg-red-950/40 border border-red-900/50 rounded-xl px-4 py-3 text-left"
+                    >
+                      {cookiesNeedUpdate && (
+                        <p className="mb-1 font-semibold">
+                          Actualizar cookies de YouTube
+                        </p>
+                      )}
                       <p>{error}</p>
                       {uploadSuggested && inputMode === 'url' && (
                         <button
                           type="button"
-                          onClick={() => { setInputMode('file'); setError(null); setUploadSuggested(false); setCookiesNeedUpdate(false) }}
+                          onClick={() => {
+                            setInputMode('file')
+                            setError(null)
+                            setUploadSuggested(false)
+                            setCookiesNeedUpdate(false)
+                          }}
                           className="mt-3 rounded-lg bg-yellow-400 px-4 py-2 font-semibold text-gray-950"
                         >
                           Continuar con un archivo de audio
