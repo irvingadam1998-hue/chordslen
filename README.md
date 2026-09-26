@@ -1,36 +1,46 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# ChordLens
 
-## Getting Started
+Analiza acordes de una canción de YouTube o de un archivo de audio, los muestra
+sincronizados con la reproducción y permite adaptar las posiciones al capo.
 
-First, run the development server:
+- `frontend/`: Next.js 16, React y TypeScript.
+- `backend/extractor_server/`: servidor Flask con trabajos asíncronos, resultados
+  reutilizables, límites de concurrencia y subida directa de archivos.
+- `backend/scripts/`: análisis con librosa, transcripción y descarga directa de
+  YouTube mediante una configuración compartida de yt-dlp.
+
+## Desarrollo
+
+Requisitos: Python 3.11+, Node.js 22+ y FFmpeg en PATH.
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+python3 -m venv .venv
+.venv/bin/pip install -r backend/requirements.txt
+.venv/bin/python backend/extractor_server/app.py
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+En otra terminal:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+cd frontend
+npm ci
+npm run dev
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+En desarrollo Next.js usa `http://localhost:5002` por defecto. Si configuras
+`API_KEY` en el backend, añade `FLASK_API_KEY` con el mismo valor en
+`frontend/.env.local`. Abre `http://localhost:3000`.
 
-## Learn More
+También puedes ejecutar `docker compose up --build` desde la raíz. El worker y
+el frontend se construyen con todos sus archivos. Para acceso desde otro equipo,
+configura `PUBLIC_WORKER_URL` con la dirección pública del worker.
 
-To learn more about Next.js, take a look at the following resources:
+## Verificación y despliegue
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+.venv/bin/python -m unittest discover -s backend/tests -v
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Consulta [DEPLOYMENT.md](DEPLOYMENT.md) para publicar en Render sin proveedores
+de descarga de pago. Ninguna configuración puede garantizar que YouTube acepte
+siempre la IP del servidor; el análisis de archivos no depende de YouTube.

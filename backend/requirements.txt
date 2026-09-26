@@ -1,8 +1,6 @@
-flask>=3.0
-gunicorn>=21.0
-yt-dlp
-librosa
+flask>=3.0,<4
+gunicorn>=21.0,<24
+yt-dlp[default]>=2026.8.19
+librosa>=0.11,<0.12
 numpy
 soundfile
-pytubefix
-curl_cffi

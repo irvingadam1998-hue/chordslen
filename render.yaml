@@ -1,32 +1,26 @@
 services:
   - type: web
     name: chordlens-worker
-    runtime: python
+    runtime: docker
     region: oregon
-    rootDir: backend/extractor_server
-    buildCommand: pip install -r requirements.txt
-    startCommand: python app.py
+    dockerfilePath: ./backend/extractor_server/Dockerfile
+    dockerContext: .
     plan: free
+    healthCheckPath: /health
     envVars:
       - key: PORT
-        value: 5002
+        value: '5002'
       - key: API_KEY
         generateValue: true
-      - key: RAPIDAPI_KEY
-        sync: false
       - key: MAX_CONCURRENT_JOBS
         value: '1'
       - key: JOB_TTL_SECONDS
-        value: '300'
+        value: '3600'
       - key: EXTRACTOR_FILE_TTL_SECONDS
         value: '900'
-      - key: YTDLP_PLAYER_CLIENTS
-        value: android,ios,tv_embedded
-      - key: YTDLP_PO_TOKEN_CLIENT
-        value: android.gvs
-      - key: YTDLP_PO_TOKEN
-        sync: false
-      - key: YOUTUBE_COOKIES_B64
-        sync: false
-      - key: YOUTUBE_COOKIES_FILE
-        sync: false
+      - key: YOUTUBE_MIN_INTERVAL_SECONDS
+        value: '5'
+      - key: YOUTUBE_COOLDOWN_SECONDS
+        value: '900'
+      - key: MAX_UPLOAD_MB
+        value: '50'

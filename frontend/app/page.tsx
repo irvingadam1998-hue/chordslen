@@ -15,11 +15,17 @@ import TranscriptionPanel from '@/components/TranscriptionPanel'
 import { AnalysisResult, TranscriptionResult } from '@/lib/types'
 import { transposeChord } from '@/lib/transpose'
 
+class AnalysisError extends Error {
+  constructor(message: string, public fallback?: string) {
+    super(message)
+  }
+}
+
 function extractVideoId(url: string): string | null {
   try {
     const parsed = new URL(url)
     if (parsed.hostname === 'youtu.be') return parsed.pathname.slice(1)
-    return parsed.searchParams.get('v')
+    return parsed.searchParams.get('v') || parsed.pathname.match(/^\/(?:shorts|embed|live)\/([\w-]{11})/)?.[1] || null
   } catch {
     return null
   }
@@ -48,6 +54,7 @@ export default function Home() {
   const [result, setResult] = useState<AnalysisResult | null>(null)
   const [analyzedUrl, setAnalyzedUrl] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [uploadSuggested, setUploadSuggested] = useState(false)
   const [currentTime, setCurrentTime] = useState(-1)
   const [capo, setCapo] = useState(0)
   const [shift, setShift] = useState(0)
@@ -71,16 +78,13 @@ export default function Home() {
       const res = await fetch(endpoint)
       const data = await res.json()
 
-      if (!res.ok) {
-        throw new Error(
-          data.error || 'Error al consultar el estado del trabajo'
+      if (!res.ok || data.status === 'failed' || data.success === false) {
+        throw new AnalysisError(
+          data.error || 'Error al consultar el estado del trabajo', data.fallback
         )
       }
 
       if (data.status === 'done') return data
-      if (data.status === 'failed') {
-        throw new Error(data.error || 'El trabajo falló')
-      }
 
       await new Promise((resolve) => setTimeout(resolve, 2000))
     }
@@ -91,8 +95,13 @@ export default function Home() {
   const handleAnalyze = async () => {
     if (!url.trim()) return
     setError(null)
+    setUploadSuggested(false)
     setResult(null)
     setAnalyzedUrl(null)
+    setAnalyzedFile(null)
+    setTranscription(null)
+    setSoloRange(null)
+    setTranscribeError(null)
     setCurrentTime(-1)
     setCapo(0)
     setShift(0)
@@ -134,10 +143,8 @@ export default function Home() {
         return
       }
 
-      if (!res.ok || data.error) {
-        setError(data.error || 'Error desconocido')
-        setStep(null)
-        return
+      if (!res.ok || data.error || data.success === false) {
+        throw new AnalysisError(data.error || 'Error desconocido', data.fallback)
       }
       if (
         !data ||
@@ -157,6 +164,7 @@ export default function Home() {
       clearTimeout(t2)
       clearTimeout(t3)
       setError(err instanceof Error ? err.message : 'Error de red')
+      setUploadSuggested(err instanceof AnalysisError && err.fallback === 'upload')
       setStep(null)
     }
   }
@@ -164,9 +172,13 @@ export default function Home() {
   const handleAnalyzeFile = async () => {
     if (!selectedFile) return
     setError(null)
+    setUploadSuggested(false)
     setResult(null)
     setAnalyzedUrl(null)
     setAnalyzedFile(null)
+    setTranscription(null)
+    setSoloRange(null)
+    setTranscribeError(null)
     setCurrentTime(-1)
     setCapo(0)
     setShift(0)
@@ -176,16 +188,26 @@ export default function Home() {
     const t3 = setTimeout(() => setStep(3), 4000)
 
     try {
+      const ticketResponse = await fetch('/api/analyze-file', { method: 'POST' })
+      const ticket = await ticketResponse.json()
+      if (!ticketResponse.ok) throw new Error(ticket.error || 'No se pudo iniciar la subida.')
+      if (selectedFile.size > ticket.maxBytes) {
+        throw new Error(`El archivo supera el límite de ${Math.floor(ticket.maxBytes / 1024 / 1024)} MB.`)
+      }
       const formData = new FormData()
       formData.append('audio', selectedFile)
-      const res = await fetch('/api/analyze-file', {
+      const res = await fetch(ticket.uploadUrl, {
         method: 'POST',
+        headers: { 'X-Upload-Token': ticket.token },
         body: formData,
       })
       clearTimeout(t2)
       clearTimeout(t3)
-      const data = await res.json()
-      if (!res.ok || data.error) {
+      let data = await res.json()
+      if (res.status === 202 && data.job_id) {
+        data = await waitForJobResult(`/api/analyze/status/${data.job_id}`)
+      }
+      if (!res.ok || data.error || data.success === false) {
         setError(data.error || 'Error desconocido')
         setStep(null)
         return
@@ -218,6 +240,7 @@ export default function Home() {
     setAnalyzedFile(null)
     setCurrentTime(-1)
     setError(null)
+    setUploadSuggested(false)
     setCapo(0)
     setShift(0)
     setSoloRange(null)
@@ -367,8 +390,17 @@ export default function Home() {
 
                   {step !== null && <ProgressSteps currentStep={step} />}
                   {error && (
-                    <div className="text-sm text-red-400 bg-red-950/40 border border-red-900/50 rounded-xl px-4 py-3 text-left">
-                      {error}
+                    <div role="alert" className="text-sm text-red-400 bg-red-950/40 border border-red-900/50 rounded-xl px-4 py-3 text-left">
+                      <p>{error}</p>
+                      {uploadSuggested && inputMode === 'url' && (
+                        <button
+                          type="button"
+                          onClick={() => { setInputMode('file'); setError(null); setUploadSuggested(false) }}
+                          className="mt-3 rounded-lg bg-yellow-400 px-4 py-2 font-semibold text-gray-950"
+                        >
+                          Continuar con un archivo de audio
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>

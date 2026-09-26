@@ -3,7 +3,10 @@ import sys
 import json
 import os
 import tempfile
-import shutil
+try:
+    from .youtube import download_audio, YouTubeError
+except ImportError:
+    from youtube import download_audio, YouTubeError
 
 NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 
@@ -216,59 +219,25 @@ def simplify_chord(chord):
     return chord
 
 
-class _QuietLogger:
-    def debug(self, msg): pass
-    def info(self, msg): pass
-    def warning(self, msg): sys.stderr.write(msg + '\n')
-    def error(self, msg): sys.stderr.write(msg + '\n')
+def _harmonic_chroma(y, sr, hop_length):
+    """Bound spectral working memory while preserving the global frame grid."""
+    import librosa
+    import numpy as np
 
-def find_cookies_file():
-    """
-    Locate a YouTube cookies file.
-    Priority:
-      1. YOUTUBE_COOKIES_B64 env var (base64-encoded cookies.txt content)
-      2. /app/cookies.txt  (Docker volume mount)
-      3. cookies.txt next to this script
-    """
-    import base64 as _b64
-
-    b64 = os.environ.get('YOUTUBE_COOKIES_B64', '').strip()
-    if b64:
-        try:
-            content = _b64.b64decode(b64).decode('utf-8')
-            tmp = '/tmp/yt_cookies.txt'
-            with open(tmp, 'w') as f:
-                f.write(content)
-            sys.stderr.write(f'[cookies] loaded from YOUTUBE_COOKIES_B64 ({len(content)} chars)\n')
-            return tmp
-        except Exception as e:
-            sys.stderr.write(f'[cookies] YOUTUBE_COOKIES_B64 decode failed: {e}\n')
-
-    candidates = [
-        '/app/cookies.txt',
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'cookies.txt'),
-    ]
-    for path in candidates:
-        if os.path.isfile(path):
-            sys.stderr.write(f'[cookies] found file: {path}\n')
-            return os.path.abspath(path)
-
-    sys.stderr.write('[cookies] no cookies found — set YOUTUBE_COOKIES_B64 in Railway\n')
-    return None
-
-def extract_video_id(url):
-    """Extract the 11-char YouTube video ID from any YouTube URL format."""
-    import re
-    patterns = [
-        r'(?:youtube\.com/watch\?v=|youtu\.be/)([a-zA-Z0-9_-]{11})',
-        r'youtube\.com/embed/([a-zA-Z0-9_-]{11})',
-        r'youtube\.com/shorts/([a-zA-Z0-9_-]{11})',
-    ]
-    for p in patterns:
-        m = re.search(p, url)
-        if m:
-            return m.group(1)
-    return None
+    frames = 1 + len(y) // hop_length
+    chunk_frames = max(1, int(10 * sr / hop_length))
+    context_frames = max(1, int(sr / hop_length))
+    chroma = np.empty((12, frames), dtype=np.float32)
+    for start in range(0, frames, chunk_frames):
+        end = min(frames, start + chunk_frames)
+        first_sample = max(0, start - context_frames) * hop_length
+        last_sample = min(len(y), (end + context_frames) * hop_length)
+        # Overlap supplies harmonic/CQT context; discard it rather than duplicate time.
+        harmonic = librosa.effects.harmonic(y[first_sample:last_sample])
+        local = librosa.feature.chroma_cqt(y=harmonic, sr=sr, hop_length=hop_length)
+        offset = start - first_sample // hop_length
+        chroma[:, start:end] = local[:, offset:offset + end - start]
+    return chroma
 
 
 def _analyze_audio(audio_path, title='', artist=''):
@@ -298,12 +267,9 @@ def _analyze_audio(audio_path, title='', artist=''):
     except Exception as e:
         return {"success": False, "error": f"Error al cargar el audio: {str(e)}"}
 
-    # 1. Harmonic/percussive separation — removes drums and noise before analysis
-    y_harmonic, _ = librosa.effects.hpss(y)
-
-    # 2. Chroma CQT on harmonic component only
+    # Keep the large harmonic/spectral intermediates bounded on small workers.
     hop_length = 512
-    chroma = librosa.feature.chroma_cqt(y=y_harmonic, sr=sr, hop_length=hop_length)
+    chroma = _harmonic_chroma(y, sr, hop_length)
     n_frames = chroma.shape[1]
 
     # 3. Key detection from global chroma (Krumhansl-Schmuckler)
@@ -526,172 +492,13 @@ def analyze_file_path(path):
     return _analyze_audio(path, title=title, artist='')
 
 
-def _parse_player_clients(value):
-    clients = [part.strip() for part in value.split(',') if part.strip()]
-    return clients or None
-
-
-def _ytdlp_download(url, tmpdir, player_clients, cookies_file=None):
-    """Attempt yt-dlp download with the given player_clients list. Returns audio_path or None."""
-    try:
-        import yt_dlp
-    except ImportError:
-        return None
-
-    ffmpeg_path = shutil.which('ffmpeg')
-    if not ffmpeg_path:
-        winget_ffmpeg = os.path.expandvars(
-            r'%LOCALAPPDATA%\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.1-full_build\bin\ffmpeg.exe'
-        )
-        if os.path.isfile(winget_ffmpeg):
-            ffmpeg_path = winget_ffmpeg
-            os.environ['PATH'] = os.path.dirname(ffmpeg_path) + os.pathsep + os.environ.get('PATH', '')
-
-    extractor_args = {'youtube': {'player_client': player_clients}}
-    po_token = os.environ.get('YTDLP_PO_TOKEN', '').strip()
-    po_client = os.environ.get('YTDLP_PO_TOKEN_CLIENT', 'android.gvs').strip() or 'android.gvs'
-    if po_token:
-        extractor_args['youtube']['po_token'] = f'{po_client}+{po_token}'
-        sys.stderr.write(f'[yt-dlp] using PO token for {po_client}\n')
-
-    base_opts = {
-        'outtmpl': os.path.join(tmpdir, 'audio.%(ext)s'),
-        'quiet': True,
-        'no_warnings': True,
-        'noprogress': True,
-        'logger': _QuietLogger(),
-        'extractor_args': extractor_args,
-    }
-    if cookies_file:
-        base_opts['cookiefile'] = cookies_file
-
-    if ffmpeg_path:
-        ydl_opts = {
-            **base_opts,
-            'format': 'bestaudio/best',
-            'ffmpeg_location': os.path.dirname(ffmpeg_path),
-            'postprocessors': [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'wav'}],
-        }
-    else:
-        ydl_opts = {
-            **base_opts,
-            'format': 'bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio',
-        }
-
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
-    except Exception as e:
-        sys.stderr.write(f'[yt-dlp] {player_clients} failed: {e}\n')
-        return None
-
-    files = []
-    for f in os.listdir(tmpdir):
-        full = os.path.join(tmpdir, f)
-        if not os.path.isfile(full):
-            continue
-        lower = f.lower()
-        if lower.endswith(('.wav', '.m4a', '.mp3', '.webm', '.opus', '.ogg', '.aac')):
-            files.append(full)
-
-    if not files:
-        sys.stderr.write(f'[yt-dlp] {player_clients} produced no audio file\n')
-        return None
-
-    files.sort(key=lambda p: os.path.getsize(p), reverse=True)
-    audio_path = files[0]
-    size = os.path.getsize(audio_path)
-    if size < 10000:
-        sys.stderr.write(f'[yt-dlp] {player_clients} produced tiny audio file ({size} bytes)\n')
-        return None
-
-    sys.stderr.write(f'[yt-dlp] {player_clients} succeeded with {os.path.basename(audio_path)} ({size} bytes)\n')
-    return audio_path
-
-
 def analyze_url(url):
-    video_id = extract_video_id(url)
-    sys.stderr.write(f'[analyze_url] video_id={video_id}\n')
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        if not video_id:
-            return {"success": False, "error": "No se pudo extraer el video_id de la URL."}
-
-        try:
-            import yt_dlp as _yt
-        except ImportError:
-            return {"success": False, "error": "No se pudo obtener el audio (yt-dlp no instalado)."}
-
-        cookies_file = find_cookies_file()
-        title, artist = _fetch_metadata(url, cookies_file)
-
-        configured_clients = _parse_player_clients(os.environ.get('YTDLP_PLAYER_CLIENTS', ''))
-        if configured_clients:
-            yt_strategies = [[client] for client in configured_clients]
-        elif cookies_file:
-            yt_strategies = [['web'], ['android'], ['ios'], ['tv_embedded']]
-        else:
-            yt_strategies = [['android'], ['ios'], ['android_embedded'], ['tv_embedded']]
-
-        audio_path = None
-        for clients in yt_strategies:
-            sys.stderr.write(f'[analyze_url] trying yt-dlp {clients}...\n')
-            subdir = tempfile.mkdtemp(dir=tmpdir)
-            audio_path = _ytdlp_download(url, subdir, clients, cookies_file)
-            if audio_path:
-                break
-
-        if not audio_path:
-            has_cookies = cookies_file is not None
-            if has_cookies:
-                msg = (
-                    "YouTube bloqueó la descarga incluso con cookies. "
-                    "Las cookies pueden haber expirado — exporta unas nuevas y actualiza YOUTUBE_COOKIES_B64."
-                )
-            else:
-                msg = (
-                    "YouTube bloquea las descargas desde servidores (detección de bots). "
-                    "Exporta cookies de YouTube y agrega la variable YOUTUBE_COOKIES_B64. "
-                    "Instrucciones en los logs del servidor."
-                )
-            sys.stderr.write('[analyze_url] ALL yt-dlp strategies failed\n')
-            sys.stderr.write('=' * 60 + '\n')
-            sys.stderr.write('SOLUCIÓN: Configurar cookies de YouTube\n')
-            sys.stderr.write('1. Instalar extensión: "Get cookies.txt LOCALLY" (Chrome/Firefox)\n')
-            sys.stderr.write('2. Ir a youtube.com con sesión iniciada\n')
-            sys.stderr.write('3. Exportar cookies.txt con la extensión\n')
-            sys.stderr.write('4. Codificar en base64:\n')
-            sys.stderr.write('   Linux/Mac: base64 -w 0 cookies.txt\n')
-            sys.stderr.write('   Windows PowerShell: [Convert]::ToBase64String([IO.File]::ReadAllBytes("cookies.txt"))\n')
-            sys.stderr.write('5. Definir YOUTUBE_COOKIES_B64 = <resultado del paso 4>\n')
-            sys.stderr.write('=' * 60 + '\n')
-            return {"success": False, "error": msg}
-
-        return _analyze_audio(audio_path, title=title, artist=artist)
-
-
-def _fetch_metadata(url, cookies_file=None):
-    """Try to fetch title/artist via yt-dlp without downloading. Returns (title, artist)."""
     try:
-        import yt_dlp as _yt
-    except ImportError:
-        return '', ''
-    for client in (['android'], ['ios'], ['tv_embedded']):
-        try:
-            opts = {
-                'quiet': True, 'no_warnings': True, 'logger': _QuietLogger(),
-                'extractor_args': {'youtube': {'player_client': client}},
-            }
-            if cookies_file:
-                opts['cookiefile'] = cookies_file
-            with _yt.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                title = info.get('title', '')
-                artist = info.get('artist') or info.get('creator') or info.get('uploader', '')
-                return title, artist
-        except Exception:
-            continue
-    return '', ''
+        with tempfile.TemporaryDirectory(prefix='chordlens_analysis_') as tmpdir:
+            audio_path, title, artist = download_audio(url, tmpdir)
+            return _analyze_audio(audio_path, title=title, artist=artist)
+    except YouTubeError as exc:
+        return exc.result()
 
 
 if __name__ == '__main__':

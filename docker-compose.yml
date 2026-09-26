@@ -1,32 +1,36 @@
 services:
   extractor:
     build:
-      context: ./backend/extractor_server
-      dockerfile: Dockerfile
-    container_name: chordlens-extractor
+      context: .
+      dockerfile: backend/extractor_server/Dockerfile
     restart: unless-stopped
     ports:
       - '5002:5002'
     environment:
       PORT: '5002'
-      API_KEY: 'secret123'
-      YTDLP_PLAYER_CLIENTS: 'android,ios,tv_embedded'
-      # Si quieres usar cookies reales en el extractor, puedes dejar una ruta local
-      # YOUTUBE_COOKIES_FILE: "/app/cookies.txt"
+      API_KEY: '${API_KEY:-local-development-key}'
+      MAX_CONCURRENT_JOBS: '1'
+      JOB_TTL_SECONDS: '3600'
+      YOUTUBE_MIN_INTERVAL_SECONDS: '5'
+      YOUTUBE_COOLDOWN_SECONDS: '900'
+      EXTRACTOR_TMP_DIR: /data
     volumes:
-      - ./backend/extractor_server:/app
+      - worker-data:/data
 
   web:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: chordlens-web
     restart: unless-stopped
     ports:
       - '3000:3000'
     environment:
-      NODE_ENV: 'production'
-      REMOTE_EXTRACTOR_URL: 'http://extractor:5002'
-      REMOTE_EXTRACTOR_TOKEN: 'secret123'
+      NODE_ENV: production
+      FLASK_API_URL: http://extractor:5002
+      FLASK_API_KEY: '${API_KEY:-local-development-key}'
+      PUBLIC_WORKER_URL: '${PUBLIC_WORKER_URL:-http://localhost:5002}'
     depends_on:
       - extractor
+
+volumes:
+  worker-data:

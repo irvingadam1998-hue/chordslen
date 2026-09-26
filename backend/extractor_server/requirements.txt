@@ -1,4 +1,1 @@
-flask>=3.0
-gunicorn>=21.0
-yt-dlp
-requests
+-r ../requirements.txt

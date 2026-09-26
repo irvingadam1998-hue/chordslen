@@ -1,25 +1,17 @@
-# Backend extractor
+# Backend ChordLens
 
-Este servicio queda separado y hace la extracción de audio de YouTube.
+El servicio actual es `extractor_server/app.py`. Hace la descarga directa de
+YouTube, el análisis de acordes, la transcripción y el análisis de archivos.
+`flask_server/` es una implementación anterior; no se usa para el despliegue.
 
-## Variables de entorno
+Desde la raíz del repositorio:
 
-```env
-PORT=5002
-API_KEY=secret123
-YTDLP_PLAYER_CLIENTS=android,ios,tv_embedded
-# opcional si quieres usar cookies reales en este backend
-# YOUTUBE_COOKIES_FILE=/app/cookies.txt
+```bash
+.venv/bin/pip install -r backend/requirements.txt
+.venv/bin/python backend/extractor_server/app.py
 ```
 
-## Recomendación de despliegue
+Requiere Node.js 22+ y FFmpeg. Para el contenedor, usa contexto de construcción
+en la raíz del repositorio y `backend/extractor_server/Dockerfile`.
 
-- Deploy en un VPS o servicio separado.
-- Este backend es el que procesa la URL de YouTube.
-- El frontend solo le pide audio a este servicio.
-
-## Endpoints esperados
-
-- GET /health
-- POST /audio
-- POST /fragment
+Consulta [DEPLOYMENT.md](../DEPLOYMENT.md) y el [contrato HTTP](../REMOTE_EXTRACTOR.md).
