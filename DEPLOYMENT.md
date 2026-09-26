@@ -142,6 +142,44 @@ que funcione desde una computadora no demuestra que YouTube acepte la IP de Rend
 Para actualizar los componentes de YouTube, reconstruye sin caché de capas de pip
 o instala `pip install --upgrade 'yt-dlp[default]'` en tu entorno local.
 
+## Rendimiento y diagnóstico de esperas
+
+El cálculo de acordes se ejecuta en el backend de Render. Vercel envía el trabajo
+y consulta su resultado. En la respuesta final y en los logs `[analyze] timings=...`
+se incluyen estos tiempos, en segundos:
+
+| Campo | Qué mide |
+| --- | --- |
+| `download_seconds` | Preparación y descarga de YouTube, incluida la conversión de audio y cualquier espera del descargador. |
+| `load_seconds` | Lectura y conversión del audio para el análisis. |
+| `features_seconds` | Separación armónica y cálculo de características musicales. |
+| `chords_seconds` | Identificación de acordes y construcción de la línea de tiempo. |
+| `analysis_seconds` | Análisis completo, incluida la carga inicial de sus librerías. |
+| `total_seconds` | Descarga más análisis en una solicitud de YouTube. |
+
+Estos tiempos comienzan dentro del trabajo: no incluyen el arranque de Render
+antes de atenderlo, la subida desde el navegador ni la espera de la siguiente
+consulta de estado. Un resultado reutilizado conserva los tiempos de su análisis
+original. `/health` por sí solo no mide el procesamiento de una canción.
+
+La optimización del análisis reutiliza las plantillas normalizadas de acordes y
+filtra cada eje del espectrograma con el filtro unidimensional de SciPy, conservando
+el tratamiento de bordes y la separación armónica. Se mantiene la frecuencia de
+muestreo, los bloques de 10 segundos y la resolución temporal del análisis.
+
+En una prueba local con audio sintético de 180 segundos, la primera ejecución
+pasó de **39.99 s a 18.22 s**. La repetición medida con cProfile pasó de **34.53 s
+a 15.47 s**. Coincidieron los 30 eventos de acordes, sus tiempos y la tonalidad.
+Estas cifras describen esa prueba local; no incluyen YouTube ni garantizan el
+mismo tiempo en Render. Para aplicar la optimización, publica el backend con
+`backend/requirements.txt` actualizado (SciPy 1.17+).
+
+Si solo la primera canción tarda más, considera el arranque del servicio:
+[Render Free](https://render.com/docs/free#spinning-down-on-idle) se suspende
+tras 15 minutos sin tráfico y su reactivación tarda aproximadamente un minuto.
+Si las siguientes también tardan, los campos anteriores permiten distinguir
+descarga de cálculo sin cambiar de plan a ciegas.
+
 ## Límites del plan gratuito
 
 No se promete disponibilidad permanente en Render Free: el servicio puede dormirse,

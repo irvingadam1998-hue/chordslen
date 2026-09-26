@@ -3,6 +3,7 @@ import sys
 import json
 import os
 import tempfile
+from time import perf_counter
 try:
     from .youtube import download_audio, YouTubeError
 except ImportError:
@@ -66,42 +67,41 @@ def _chord_quality(chord_name):
 
 def detect_chord_from_chroma(chroma_vec, templates, diatonic_set=None,
                              prev_chord=None, dominant_chord=None):
-    """
-    Score all templates and return (best_chord, best_score, second_chord).
-    Applies: rarity penalty, diatonic boost, dominant boost, continuity boost.
-    """
-    import numpy as np
-    norm = np.linalg.norm(chroma_vec)
-    if norm < 0.01:
-        return None, 0.0, None
-    chroma_n = chroma_vec / norm
-    scored = []
-    for chord_name, template in templates.items():
-        t_norm = np.linalg.norm(template)
-        if t_norm == 0:
-            continue
-        score = float(np.dot(chroma_n, template / t_norm))
-        # Penalize rare chord types
-        score *= CHORD_TYPE_PENALTY.get(_chord_quality(chord_name), 1.0)
-        # Dominant chord boost (V major) — harmonic minor raises the V to major
-        if dominant_chord and chord_name == dominant_chord:
-            score *= 1.35
-        # Dominant 7th boost (V7) — very common in all styles
-        if dominant_chord and chord_name == dominant_chord + '7':
-            score *= 1.30
-        # Boost diatonic chords
-        if diatonic_set and chord_name in diatonic_set:
-            score *= 1.15
-        # Continuity: slight boost for staying on the same chord
-        if prev_chord and chord_name == prev_chord:
-            score *= 1.05
-        scored.append((score, chord_name))
+    return ChordScorer(templates, diatonic_set, dominant_chord).detect(chroma_vec, prev_chord)
 
-    scored.sort(reverse=True)
-    best_score   = scored[0][0] if scored else 0.0
-    best_chord   = scored[0][1] if best_score > 0.45 else None
-    second_chord = scored[1][1] if len(scored) > 1 else None
-    return best_chord, best_score, second_chord
+
+class ChordScorer:
+    """Normalize templates once per song and score all chords in one operation."""
+    def __init__(self, templates, diatonic_set=None, dominant_chord=None):
+        import numpy as np
+        # Alphabetical order preserves the previous (score, name) tie breaker.
+        self.names = sorted(name for name, vector in templates.items() if np.linalg.norm(vector) > 0)
+        self.index = {name: index for index, name in enumerate(self.names)}
+        self.vectors = np.array([templates[name] / np.linalg.norm(templates[name]) for name in self.names])
+        self.penalties = np.array([CHORD_TYPE_PENALTY.get(_chord_quality(name), 1.0) for name in self.names])
+        self.dominant = self.index.get(dominant_chord)
+        self.dominant7 = self.index.get(dominant_chord + '7') if dominant_chord else None
+        self.diatonic = np.array([name in (diatonic_set or ()) for name in self.names], dtype=bool)
+
+    def detect(self, chroma_vec, prev_chord=None):
+        import numpy as np
+        norm = np.linalg.norm(chroma_vec)
+        if norm < 0.01 or not self.names:
+            return None, 0.0, None
+        scores = self.vectors @ (chroma_vec / norm)
+        scores *= self.penalties
+        if self.dominant is not None:
+            scores[self.dominant] *= 1.35
+        if self.dominant7 is not None:
+            scores[self.dominant7] *= 1.30
+        scores[self.diatonic] *= 1.15
+        if prev_chord in self.index:
+            scores[self.index[prev_chord]] *= 1.05
+        ranked = np.argsort(scores, kind='stable')[::-1]
+        best = int(ranked[0])
+        score = float(scores[best])
+        return (self.names[best] if score > 0.45 else None, score,
+                self.names[int(ranked[1])] if len(ranked) > 1 else None)
 
 
 def detect_key(global_chroma):
@@ -219,6 +219,34 @@ def simplify_chord(chord):
     return chord
 
 
+def _median_along_axis(values, axis, size=31):
+    """Use SciPy's fast 1-D filter without mixing independent spectrogram rows."""
+    import numpy as np
+    from scipy.ndimage import median_filter
+
+    rows = np.moveaxis(values, axis, -1)
+    radius = size // 2
+    padding = [(0, 0)] * rows.ndim
+    padding[-1] = (radius, radius)
+    # NumPy symmetric padding equals ndimage's half-sample symmetric 'reflect'.
+    # Each row's halo prevents the flattened filter from reading the next row.
+    padded = np.pad(rows, padding, mode='symmetric')
+    filtered = median_filter(padded.ravel(), size=size, mode='reflect').reshape(padded.shape)
+    return np.moveaxis(filtered[..., radius:radius + rows.shape[-1]], -1, axis)
+
+
+def _harmonic_audio(y):
+    """Equivalent to librosa's default harmonic separation; only reconstruct H."""
+    import librosa
+
+    spectrum = librosa.stft(y)
+    magnitude, phase = librosa.magphase(spectrum)
+    harmonic = _median_along_axis(magnitude, -1)
+    percussive = _median_along_axis(magnitude, -2)
+    mask = librosa.util.softmask(harmonic, percussive, power=2, split_zeros=True)
+    return librosa.istft((magnitude * mask) * phase, dtype=y.dtype, length=len(y))
+
+
 def _harmonic_chroma(y, sr, hop_length):
     """Bound spectral working memory while preserving the global frame grid."""
     import librosa
@@ -233,7 +261,7 @@ def _harmonic_chroma(y, sr, hop_length):
         first_sample = max(0, start - context_frames) * hop_length
         last_sample = min(len(y), (end + context_frames) * hop_length)
         # Overlap supplies harmonic/CQT context; discard it rather than duplicate time.
-        harmonic = librosa.effects.harmonic(y[first_sample:last_sample])
+        harmonic = _harmonic_audio(y[first_sample:last_sample])
         local = librosa.feature.chroma_cqt(y=harmonic, sr=sr, hop_length=hop_length)
         offset = start - first_sample // hop_length
         chroma[:, start:end] = local[:, offset:offset + end - start]
@@ -242,6 +270,7 @@ def _harmonic_chroma(y, sr, hop_length):
 
 def _analyze_audio(audio_path, title='', artist=''):
     """Analyze a local audio file and return the chord timeline."""
+    analysis_started = perf_counter()
     try:
         audio_size = os.path.getsize(audio_path)
     except OSError:
@@ -260,6 +289,7 @@ def _analyze_audio(audio_path, title='', artist=''):
     templates = make_chord_templates()
 
     MAX_DURATION = 360
+    load_started = perf_counter()
     try:
         sys.stderr.write('[analyze] loading audio with librosa...\n')
         y, sr = librosa.load(audio_path, sr=22050, mono=True, duration=MAX_DURATION)
@@ -268,9 +298,11 @@ def _analyze_audio(audio_path, title='', artist=''):
         return {"success": False, "error": f"Error al cargar el audio: {str(e)}"}
 
     # Keep the large harmonic/spectral intermediates bounded on small workers.
+    features_started = perf_counter()
     hop_length = 512
     chroma = _harmonic_chroma(y, sr, hop_length)
     n_frames = chroma.shape[1]
+    chords_started = perf_counter()
 
     # 3. Key detection from global chroma (Krumhansl-Schmuckler)
     global_chroma = chroma.mean(axis=1)
@@ -321,6 +353,7 @@ def _analyze_audio(audio_path, title='', artist=''):
 
     raw_chords: list = []
     raw_times:  list = []
+    scorer = ChordScorer(templates, diatonic_set, dominant_chord)
 
     current_chord = None
     cand_chord    = None
@@ -339,9 +372,7 @@ def _analyze_audio(audio_path, title='', artist=''):
         seg_chroma = chroma[:, start_f:end_f]
         chroma_vec = np.median(seg_chroma, axis=1)
 
-        chord, score, second_chord = detect_chord_from_chroma(
-            chroma_vec, templates, diatonic_set, current_chord, dominant_chord
-        )
+        chord, score, second_chord = scorer.detect(chroma_vec, current_chord)
 
         if score < CONFIDENCE_THRESHOLD:
             # Low confidence: rescue with dominant or dominant-7 if runner-up
@@ -430,6 +461,15 @@ def _analyze_audio(audio_path, title='', artist=''):
     # 8. Harmonic corrections: recover dominant chord (e.g. Em → E before Am)
     chords_timeline = apply_harmonic_corrections(chords_timeline, key_root, key_mode)
 
+    finished = perf_counter()
+    timings = {
+        'load_seconds': round(features_started - load_started, 3),
+        'features_seconds': round(chords_started - features_started, 3),
+        'chords_seconds': round(finished - chords_started, 3),
+        'analysis_seconds': round(finished - analysis_started, 3),
+    }
+    sys.stderr.write(f'[analyze] timings={json.dumps(timings)}\n')
+
     return {
         "success": True,
         "notes_count": n_frames,
@@ -437,6 +477,7 @@ def _analyze_audio(audio_path, title='', artist=''):
         "title": title,
         "artist": artist,
         "key": f"{NOTE_NAMES[key_root]} {key_mode}",
+        "timings": timings,
     }
 
 
@@ -493,11 +534,18 @@ def analyze_file_path(path):
 
 
 def analyze_url(url):
+    started = perf_counter()
     try:
         with tempfile.TemporaryDirectory(prefix='chordlens_analysis_') as tmpdir:
             notices = []
             audio_path, title, artist = download_audio(url, tmpdir, notices=notices)
+            downloaded = perf_counter()
             result = _analyze_audio(audio_path, title=title, artist=artist)
+            result.setdefault('timings', {}).update({
+                'download_seconds': round(downloaded - started, 3),
+                'total_seconds': round(perf_counter() - started, 3),
+            })
+            sys.stderr.write(f'[analyze] timings={json.dumps(result["timings"])}\n')
             if notices:
                 result['warnings'] = notices
             return result

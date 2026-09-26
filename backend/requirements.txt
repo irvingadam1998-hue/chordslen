@@ -3,4 +3,5 @@ gunicorn>=21.0,<24
 yt-dlp[default]>=2026.8.19
 librosa>=0.11,<0.12
 numpy
+scipy>=1.17,<2
 soundfile
