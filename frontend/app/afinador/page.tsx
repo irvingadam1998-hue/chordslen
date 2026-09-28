@@ -1,58 +1,54 @@
+import { Headphones, Mic, SlidersHorizontal } from 'lucide-react'
 import Tuner from '@/components/Tuner'
-
+import PageHeading from '@/components/PageHeading'
 export const metadata = {
-  title: 'Afinador de guitarra online — ChordLens',
-  description: 'Afinador cromático gratuito que usa el micrófono de tu dispositivo. Afinación estándar EADGBE, A4 = 440 Hz.',
+  title: 'Afinador de guitarra — ChordLens',
+  description:
+    'Afinador cromático con micrófono. Afinación estándar EADGBE, A4 = 440 Hz.',
 }
-
 export default function AfinadorPage() {
   return (
-    <main className="min-h-screen text-white flex flex-col">
-
-      {/* Header */}
-      <section className="border-b border-white/5 py-10 sm:py-16 px-4 sm:px-6 text-center">
-        <div className="max-w-xl mx-auto flex flex-col items-center gap-4">
-          <div className="inline-flex items-center gap-2 bg-yellow-400/10 border border-yellow-400/20 rounded-full px-4 py-1.5 text-yellow-400 text-xs font-medium tracking-wider">
-            <span className="w-1.5 h-1.5 rounded-full bg-yellow-400" />
-            Herramienta gratuita
-          </div>
-          <h1 className="text-4xl sm:text-5xl font-black tracking-tighter">
-            Afinador de guitarra
-          </h1>
-          <p className="text-white/40 text-sm leading-relaxed max-w-sm">
-            Afinador cromático que usa el micrófono de tu dispositivo.
-            Estándar <span className="text-white/60 font-mono">A4 = 440 Hz</span>.
-          </p>
-        </div>
-      </section>
-
-      {/* Tuner */}
-      <section className="flex-1 flex items-center justify-center px-4 sm:px-6 py-8 sm:py-16">
-        <div className="w-full max-w-sm bg-white/3 border border-white/8 rounded-2xl p-5 sm:p-8">
-          <Tuner />
-        </div>
-      </section>
-
-      {/* How to use */}
-      <section className="border-t border-white/5 py-10 sm:py-16 px-4 sm:px-6">
-        <div className="max-w-2xl mx-auto">
-          <h2 className="text-sm font-semibold tracking-widest text-white/30 uppercase mb-6 sm:mb-8 text-center">Cómo usar</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
+    <main className="shell py-12 sm:py-16">
+      <div className="grid items-start gap-12 lg:grid-cols-2">
+        <div>
+          <PageHeading label="Antes de tocar" title="Todo empieza por afinar.">
+            Acerca tu guitarra, activa el micrófono y pulsa una cuerda. El
+            afinador escucha directamente desde tu navegador.
+          </PageHeading>
+          <div className="flex flex-col gap-6">
             {[
-              { n: '01', title: 'Activa el micrófono', desc: 'Presiona el botón y permite el acceso al micrófono en el navegador.' },
-              { n: '02', title: 'Toca una cuerda', desc: 'Pulsa la cuerda de tu guitarra cerca del micrófono. La nota detectada aparece en grande.' },
-              { n: '03', title: 'Ajusta hasta centrar', desc: 'La aguja muestra cuántos cents estás desviado. Cuando se pone amarilla, está afinado.' },
-            ].map(({ n, title, desc }) => (
-              <div key={n} className="flex flex-col gap-3 p-5 rounded-xl bg-white/3 border border-white/8">
-                <span className="text-white/15 font-mono text-xs">{n}</span>
-                <h3 className="font-semibold text-sm text-white">{title}</h3>
-                <p className="text-white/40 text-xs leading-relaxed">{desc}</p>
+              {
+                icon: Mic,
+                title: 'Activa el micrófono',
+                text: 'Permite el acceso cuando lo solicite tu navegador.',
+              },
+              {
+                icon: Headphones,
+                title: 'Una cuerda a la vez',
+                text: 'Deja que suene y evita ruido alrededor.',
+              },
+              {
+                icon: SlidersHorizontal,
+                title: 'Busca el centro',
+                text: 'Ajusta suavemente hasta que el indicador marque Afinado.',
+              },
+            ].map(({ icon: Icon, title, text }) => (
+              <div key={title} className="flex items-start gap-4">
+                <span className="rounded-xl border border-[#dce2d8] bg-white p-3">
+                  <Icon size={20} />
+                </span>
+                <div>
+                  <h2 className="text-sm font-bold">{title}</h2>
+                  <p className="muted mt-1 text-xs leading-6">{text}</p>
+                </div>
               </div>
             ))}
           </div>
         </div>
-      </section>
-
+        <section className="panel p-6 sm:p-10" aria-label="Afinador cromático">
+          <Tuner />
+        </section>
+      </div>
     </main>
   )
 }

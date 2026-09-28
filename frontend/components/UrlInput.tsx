@@ -1,37 +1,48 @@
 'use client'
-
-interface UrlInputProps {
+import { ArrowRight, Link2 } from 'lucide-react'
+export default function UrlInput({
+  url,
+  onChange,
+  onSubmit,
+  disabled,
+}: {
   url: string
-  onChange: (value: string) => void
+  onChange: (url: string) => void
   onSubmit: () => void
-  disabled: boolean
-}
-
-export default function UrlInput({ url, onChange, onSubmit, disabled }: UrlInputProps) {
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' && !disabled) {
-      onSubmit()
-    }
-  }
-
+  disabled?: boolean
+}) {
   return (
-    <div className="flex gap-2 w-full">
-      <input
-        type="text"
-        value={url}
-        onChange={(e) => onChange(e.target.value)}
-        onKeyDown={handleKeyDown}
-        placeholder="https://www.youtube.com/watch?v=..."
-        disabled={disabled}
-        className="flex-1 px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white placeholder-white/20 focus:outline-none focus:border-yellow-400/60 focus:bg-white/8 transition-all disabled:opacity-40 disabled:cursor-not-allowed text-sm"
-      />
+    <form
+      onSubmit={(e) => {
+        e.preventDefault()
+        onSubmit()
+      }}
+      className="flex flex-col gap-3"
+    >
+      <label htmlFor="youtube-url" className="text-xs font-semibold">
+        Enlace de YouTube
+      </label>
+      <div className="relative">
+        <Link2 size={18} className="muted absolute left-4 top-4" />
+        <input
+          id="youtube-url"
+          type="url"
+          required
+          placeholder="https://www.youtube.com/watch?v=…"
+          value={url}
+          onChange={(e) => onChange(e.target.value)}
+          disabled={disabled}
+          className="field pl-11"
+        />
+      </div>
       <button
-        onClick={onSubmit}
+        type="submit"
         disabled={disabled || !url.trim()}
-        className="px-5 py-3 rounded-xl bg-yellow-400 text-gray-950 font-bold text-sm tracking-widest hover:bg-yellow-300 active:scale-95 transition-all disabled:opacity-30 disabled:cursor-not-allowed whitespace-nowrap"
+        className="btn-primary w-full"
       >
-        {disabled ? '...' : 'ANALIZAR'}
+        {disabled ? 'Procesando audio' : 'Encontrar acordes'}
+        <ArrowRight size={17} />
       </button>
-    </div>
+    </form>
   )
 }

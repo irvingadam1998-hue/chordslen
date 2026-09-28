@@ -1,0 +1,6 @@
+{
+  "features": {"representation": "cqt", "bins_per_octave": 36, "hop_length": 256, "chroma": true, "bass": true},
+  "model": {"temporal": "transformer", "channels": 24, "embedding": 128, "layers": 2, "heads": 4, "bass_head": true},
+  "train": {"batch_size": 4, "segment_seconds": 6, "num_epochs": 80, "patience": 12},
+  "decode": {"switch_cost": 2, "key_prior_weight": 0, "bass_threshold": 0.8}
+}

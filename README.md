@@ -8,6 +8,27 @@ sincronizados con la reproducción y permite adaptar las posiciones al capo.
   reutilizables, límites de concurrencia y subida directa de archivos.
 - `backend/scripts/`: análisis con librosa, transcripción y descarga directa de
   YouTube mediante una configuración compartida de yt-dlp.
+- `backend/model/`: ACR neuronal opcional en PyTorch (CNN, BiLSTM/Transformer,
+  entrenamiento, inferencia y decodificación temporal). El detector actual sigue
+  siendo el predeterminado sin un checkpoint habilitado.
+
+## Reconocimiento neuronal experimental
+
+La red está implementada y hay un prototipo entrenado localmente. **Todavía no
+mejora al detector actual**; no se activa automáticamente. Consulta:
+
+- [Arquitectura y auditoría de las funciones existentes](ACR_ARCHITECTURE.md).
+- [Datos, entrenamiento, GPU, inferencia y evaluación](ACR_GUIDE.md).
+- [Resultados reales y límites del prototipo](ACR_RESULTS.md).
+
+```bash
+python analyze.py --file cancion.wav --engine current
+python evaluate.py --manifest data/manifest.jsonl --checkpoint experiments/prototype/best.pt
+```
+
+La interfaz usa Manrope, IBM Plex Mono e iconos Lucide. La vista de práctica
+incluye acorde actual/siguiente, secuencia con tiempos, diagramas, transposición
+de acordes extendidos/inversiones y exportación TXT.
 
 ## Desarrollo
 

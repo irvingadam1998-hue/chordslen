@@ -1,0 +1,7 @@
+{
+  "features": {"representation": "cqt", "bins_per_octave": 36, "hop_length": 512, "chroma": true, "bass": true},
+  "model": {"temporal": "bilstm", "channels": 16, "embedding": 96, "layers": 2, "dropout": 0.25, "bass_head": true, "head": "joint"},
+  "train": {"batch_size": 8, "segment_seconds": 8, "num_epochs": 60, "patience": 8, "weight_decay": 0.01, "pitch_shift": 6,
+            "segments_per_epoch": 3000, "validation_segments": 800},
+  "decode": {"switch_cost": 48, "key_prior_weight": 0, "bass_threshold": 0.8, "vocabulary": "full"}
+}

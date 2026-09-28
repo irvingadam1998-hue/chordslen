@@ -1,816 +1,632 @@
-'use client'
-
-import { useState, useRef } from 'react'
-import UrlInput from '@/components/UrlInput'
-import ProgressSteps from '@/components/ProgressSteps'
-import ChordTimeline from '@/components/ChordTimeline'
-import ChordChart from '@/components/ChordChart'
-import YoutubePlayer from '@/components/YoutubePlayer'
-import AudioPlayer from '@/components/AudioPlayer'
-import LyricsDisplay from '@/components/LyricsDisplay'
-import TransposePanel from '@/components/TransposePanel'
-import ChordProgressBar from '@/components/ChordProgressBar'
-import RangeSelector from '@/components/RangeSelector'
-import TranscriptionPanel from '@/components/TranscriptionPanel'
-import { AnalysisResult, TranscriptionResult } from '@/lib/types'
-import { transposeChord } from '@/lib/transpose'
+"use client";
+import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import {
+  ArrowLeft,
+  ArrowRight,
+  AudioLines,
+  BookOpen,
+  Check,
+  Clock3,
+  Download,
+  FileAudio,
+  Guitar,
+  Headphones,
+  Info,
+  Link2,
+  ListMusic,
+  Music2,
+  Upload,
+  TriangleAlert,
+} from "lucide-react";
+import UrlInput from "@/components/UrlInput";
+import ProgressSteps from "@/components/ProgressSteps";
+import ChordChart from "@/components/ChordChart";
+import YoutubePlayer from "@/components/YoutubePlayer";
+import AudioPlayer from "@/components/AudioPlayer";
+import LyricsDisplay from "@/components/LyricsDisplay";
+import TransposePanel from "@/components/TransposePanel";
+import ChordProgressBar from "@/components/ChordProgressBar";
+import ChordDiagram from "@/components/ChordDiagram";
+import { AnalysisResult } from "@/lib/types";
+import { transposeChord } from "@/lib/transpose";
 
 class AnalysisError extends Error {
   constructor(
     message: string,
     public fallback?: string,
-    public code?: string
+    public code?: string,
   ) {
-    super(message)
+    super(message);
   }
 }
-
-function extractVideoId(url: string): string | null {
+function extractVideoId(url: string) {
   try {
-    const parsed = new URL(url)
-    if (parsed.hostname === 'youtu.be') return parsed.pathname.slice(1)
-    return (
-      parsed.searchParams.get('v') ||
-      parsed.pathname.match(/^\/(?:shorts|embed|live)\/([\w-]{11})/)?.[1] ||
-      null
-    )
+    const u = new URL(url);
+    return u.hostname === "youtu.be"
+      ? u.pathname.slice(1)
+      : u.searchParams.get("v") ||
+          u.pathname.match(/^\/(?:shorts|embed|live)\/([\w-]{11})/)?.[1] ||
+          null;
   } catch {
-    return null
+    return null;
   }
 }
-
-function SectionLabel({ number, title }: { number: string; title: string }) {
-  return (
-    <div className="flex items-center gap-4 mb-6">
-      <span className="text-[10px] font-mono text-yellow-400/60 tracking-widest">
-        {number}
-      </span>
-      <h2 className="text-xs font-semibold tracking-widest text-white/40 uppercase">
-        {title}
-      </h2>
-      <div className="flex-1 h-px bg-white/5" />
-    </div>
-  )
+function timeLabel(seconds: number) {
+  return `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
 }
+const example: AnalysisResult = {
+  success: true,
+  notes_count: 0,
+  title: "Una progresión para empezar",
+  duration: 16,
+  key: "C major",
+  chords_timeline: ["C", "Am", "F", "G", "Cmaj7", "Am7", "Fsus2", "G7"].map(
+    (chord, i) => ({
+      chord,
+      time: i * 2,
+      end: i * 2 + 2,
+      time_str: timeLabel(i * 2),
+      measure: i + 1,
+    }),
+  ),
+};
 
 export default function Home() {
-  const [url, setUrl] = useState('')
-  const [inputMode, setInputMode] = useState<'url' | 'file'>('url')
-  const [selectedFile, setSelectedFile] = useState<File | null>(null)
-  const [analyzedFile, setAnalyzedFile] = useState<File | null>(null)
-  const [step, setStep] = useState<1 | 2 | 3 | null>(null)
-  const [result, setResult] = useState<AnalysisResult | null>(null)
-  const [analyzedUrl, setAnalyzedUrl] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [uploadSuggested, setUploadSuggested] = useState(false)
-  const [cookiesNeedUpdate, setCookiesNeedUpdate] = useState(false)
-  const [currentTime, setCurrentTime] = useState(-1)
-  const [capo, setCapo] = useState(0)
-  const [shift, setShift] = useState(0)
-  const seekRef = useRef<((time: number) => void) | null>(null)
-  const [soloRange, setSoloRange] = useState<{
-    start: number
-    end: number
-  } | null>(null)
-  const [transcription, setTranscription] =
-    useState<TranscriptionResult | null>(null)
-  const [transcribing, setTranscribing] = useState(false)
-  const [transcribeError, setTranscribeError] = useState<string | null>(null)
+  const [url, setUrl] = useState("");
+  const [inputMode, setInputMode] = useState<"url" | "file">("url");
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [analyzedFile, setAnalyzedFile] = useState<File | null>(null);
+  const [analyzedUrl, setAnalyzedUrl] = useState<string | null>(null);
+  const [step, setStep] = useState<1 | 2 | 3 | null>(null);
+  const [result, setResult] = useState<AnalysisResult | null>(null);
+  const [error, setError] = useState<AnalysisError | null>(null);
+  const [currentTime, setCurrentTime] = useState(-1);
+  const [playerDuration, setPlayerDuration] = useState(0);
+  const [capo, setCapo] = useState(0);
+  const [shift, setShift] = useState(0);
+  const [demo, setDemo] = useState(false);
+  const [lyricsOpen, setLyricsOpen] = useState(false);
+  const seekRef = useRef<((time: number) => void) | null>(null);
+  const requestRef = useRef<AbortController | null>(null);
+  useEffect(() => () => requestRef.current?.abort(), []);
+  const transposeBy = (((shift - capo) % 12) + 12) % 12;
+  const videoId = analyzedUrl ? extractVideoId(analyzedUrl) : null;
+  const duration =
+    result?.duration ||
+    playerDuration ||
+    result?.chords_timeline.at(-1)?.end ||
+    0;
+  const chords = result?.chords_timeline ?? [];
+  const unique = new Set(
+    chords.filter((c) => c.chord !== "N").map((c) => c.chord),
+  ).size;
 
-  const transposeBy = (((shift - capo) % 12) + 12) % 12
-  const videoId = analyzedUrl ? extractVideoId(analyzedUrl) : null
-  const hasLyrics = !!(result?.artist && result?.title)
-
-  const waitForJobResult = async (endpoint: string) => {
-    const startedAt = Date.now()
-    while (Date.now() - startedAt < 10 * 60 * 1000) {
-      const res = await fetch(endpoint)
-      const data = await res.json()
-
-      if (!res.ok || data.status === 'failed' || data.success === false) {
+  function reset() {
+    requestRef.current?.abort();
+    setResult(null);
+    setError(null);
+    setAnalyzedUrl(null);
+    setAnalyzedFile(null);
+    setCurrentTime(-1);
+    setPlayerDuration(0);
+    setCapo(0);
+    setShift(0);
+    setDemo(false);
+    setLyricsOpen(false);
+    setStep(null);
+  }
+  async function waitForJob(endpoint: string, signal: AbortSignal) {
+    const started = Date.now();
+    while (Date.now() - started < 10 * 60 * 1000) {
+      const response = await fetch(endpoint, { signal });
+      const data = await response.json();
+      if (!response.ok || data.status === "failed" || data.success === false)
         throw new AnalysisError(
-          data.error || 'Error al consultar el estado del trabajo',
+          data.error || "No se pudo completar el análisis.",
           data.fallback,
-          data.code
-        )
-      }
-
-      if (data.status === 'done') return data
-
-      await new Promise((resolve) => setTimeout(resolve, 2000))
+          data.code,
+        );
+      if (data.status === "done") return data;
+      await new Promise((resolve) => setTimeout(resolve, 2000));
     }
-
-    throw new Error('El trabajo tardó demasiado tiempo en completarse.')
+    throw new AnalysisError(
+      "El análisis tardó más de lo esperado. Inténtalo de nuevo en unos minutos.",
+    );
   }
-
-  const handleAnalyze = async () => {
-    if (!url.trim()) return
-    setError(null)
-    setUploadSuggested(false)
-    setCookiesNeedUpdate(false)
-    setResult(null)
-    setAnalyzedUrl(null)
-    setAnalyzedFile(null)
-    setTranscription(null)
-    setSoloRange(null)
-    setTranscribeError(null)
-    setCurrentTime(-1)
-    setCapo(0)
-    setShift(0)
-    setStep(1)
-
-    const t2 = setTimeout(() => setStep(2), 2000)
-    const t3 = setTimeout(() => setStep(3), 4000)
-
+  async function analyze() {
+    if (
+      step ||
+      (inputMode === "url" && !url.trim()) ||
+      (inputMode === "file" && !selectedFile)
+    )
+      return;
+    reset();
+    const controller = new AbortController();
+    requestRef.current = controller;
+    setStep(1);
     try {
-      const res = await fetch('/api/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url }),
-      })
-      clearTimeout(t2)
-      clearTimeout(t3)
-      const data = await res.json()
-
-      if (res.status === 202 && data.jobId) {
-        const finished = await waitForJobResult(
-          `/api/analyze/status/${data.jobId}`
-        )
-
-        if (
-          !finished ||
-          typeof finished !== 'object' ||
-          !Array.isArray(finished.chords_timeline)
-        ) {
-          setError(
-            'El backend no devolvió un análisis válido de acordes. Revisa la ruta del servicio remoto.'
-          )
-          setStep(null)
-          return
-        }
-
-        setResult(finished)
-        setAnalyzedUrl(url)
-        setStep(null)
-        return
+      let response: Response;
+      if (inputMode === "url") {
+        response = await fetch("/api/analyze", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url }),
+          signal: controller.signal,
+        });
+      } else {
+        const ticketResponse = await fetch("/api/analyze-file", {
+          method: "POST",
+          signal: controller.signal,
+        });
+        const ticket = await ticketResponse.json();
+        if (!ticketResponse.ok)
+          throw new AnalysisError(
+            ticket.error || "No se pudo iniciar la subida.",
+          );
+        if (!selectedFile || selectedFile.size > ticket.maxBytes)
+          throw new AnalysisError(
+            `El archivo supera el límite de ${Math.floor(ticket.maxBytes / 1024 / 1024)} MB.`,
+          );
+        const form = new FormData();
+        form.append("audio", selectedFile);
+        response = await fetch(ticket.uploadUrl, {
+          method: "POST",
+          headers: { "X-Upload-Token": ticket.token },
+          body: form,
+          signal: controller.signal,
+        });
       }
-
-      if (!res.ok || data.error || data.success === false) {
+      let data = await response.json();
+      if (!response.ok || data.error || data.success === false)
         throw new AnalysisError(
-          data.error || 'Error desconocido',
+          data.error || "No se pudo analizar el audio.",
           data.fallback,
-          data.code
-        )
+          data.code,
+        );
+      const job = data.jobId || data.job_id;
+      if (response.status === 202 && job) {
+        setStep(2);
+        data = await waitForJob(
+          `/api/analyze/status/${job}`,
+          controller.signal,
+        );
       }
-      if (
-        !data ||
-        typeof data !== 'object' ||
-        !Array.isArray(data.chords_timeline)
-      ) {
-        setError(
-          'El backend no devolvió un análisis válido de acordes. Revisa la ruta del servicio remoto.'
-        )
-        setStep(null)
-        return
-      }
-      setResult(data)
-      setAnalyzedUrl(url)
-      setStep(null)
+      if (!data || !Array.isArray(data.chords_timeline))
+        throw new AnalysisError(
+          "El servicio no devolvió una secuencia de acordes válida.",
+        );
+      setResult(data);
+      if (inputMode === "url") setAnalyzedUrl(url);
+      else setAnalyzedFile(selectedFile);
     } catch (err) {
-      clearTimeout(t2)
-      clearTimeout(t3)
-      setError(err instanceof Error ? err.message : 'Error de red')
-      setUploadSuggested(
-        err instanceof AnalysisError && err.fallback === 'upload'
-      )
-      setCookiesNeedUpdate(
-        err instanceof AnalysisError &&
-          !!err.code?.startsWith('YOUTUBE_COOKIES_')
-      )
-      setStep(null)
-    }
-  }
-
-  const handleAnalyzeFile = async () => {
-    if (!selectedFile) return
-    setError(null)
-    setUploadSuggested(false)
-    setCookiesNeedUpdate(false)
-    setResult(null)
-    setAnalyzedUrl(null)
-    setAnalyzedFile(null)
-    setTranscription(null)
-    setSoloRange(null)
-    setTranscribeError(null)
-    setCurrentTime(-1)
-    setCapo(0)
-    setShift(0)
-    setStep(1)
-
-    const t2 = setTimeout(() => setStep(2), 2000)
-    const t3 = setTimeout(() => setStep(3), 4000)
-
-    try {
-      const ticketResponse = await fetch('/api/analyze-file', {
-        method: 'POST',
-      })
-      const ticket = await ticketResponse.json()
-      if (!ticketResponse.ok)
-        throw new Error(ticket.error || 'No se pudo iniciar la subida.')
-      if (selectedFile.size > ticket.maxBytes) {
-        throw new Error(
-          `El archivo supera el límite de ${Math.floor(ticket.maxBytes / 1024 / 1024)} MB.`
-        )
-      }
-      const formData = new FormData()
-      formData.append('audio', selectedFile)
-      const res = await fetch(ticket.uploadUrl, {
-        method: 'POST',
-        headers: { 'X-Upload-Token': ticket.token },
-        body: formData,
-      })
-      clearTimeout(t2)
-      clearTimeout(t3)
-      let data = await res.json()
-      if (res.status === 202 && data.job_id) {
-        data = await waitForJobResult(`/api/analyze/status/${data.job_id}`)
-      }
-      if (!res.ok || data.error || data.success === false) {
-        setError(data.error || 'Error desconocido')
-        setStep(null)
-        return
-      }
-      if (
-        !data ||
-        typeof data !== 'object' ||
-        !Array.isArray(data.chords_timeline)
-      ) {
-        setError(
-          'El backend no devolvió un análisis válido de acordes. Revisa la ruta del servicio remoto.'
-        )
-        setStep(null)
-        return
-      }
-      setResult(data)
-      setAnalyzedFile(selectedFile)
-      setStep(null)
-    } catch (err) {
-      clearTimeout(t2)
-      clearTimeout(t3)
-      setError(err instanceof Error ? err.message : 'Error de red')
-      setStep(null)
-    }
-  }
-
-  const resetSearch = () => {
-    setResult(null)
-    setAnalyzedUrl(null)
-    setAnalyzedFile(null)
-    setCurrentTime(-1)
-    setError(null)
-    setUploadSuggested(false)
-    setCookiesNeedUpdate(false)
-    setCapo(0)
-    setShift(0)
-    setSoloRange(null)
-    setTranscription(null)
-    setTranscribeError(null)
-  }
-
-  const handleTranscribe = async (start: number, end: number) => {
-    if (!analyzedUrl) return
-    setSoloRange({ start, end })
-    setTranscription(null)
-    setTranscribeError(null)
-    setTranscribing(true)
-    try {
-      const res = await fetch('/api/transcribe', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: analyzedUrl, start, end }),
-      })
-      const data = await res.json()
-      if (res.status === 202 && data.jobId) {
-        const finished = await waitForJobResult(
-          `/api/transcribe/status/${data.jobId}`
-        )
-        setTranscription(finished)
-        return
-      }
-      if (!res.ok || data.error) {
-        setTranscribeError(data.error || 'Error desconocido')
-        return
-      }
-      setTranscription(data)
-    } catch (err) {
-      setTranscribeError(err instanceof Error ? err.message : 'Error de red')
+      if (controller.signal.aborted) return;
+      setError(
+        err instanceof AnalysisError
+          ? err
+          : new AnalysisError(
+              err instanceof Error
+                ? err.message
+                : "No se pudo conectar con el servidor.",
+            ),
+      );
     } finally {
-      setTranscribing(false)
+      if (!controller.signal.aborted) setStep(null);
     }
   }
-
-  const hasChords =
-    !!result &&
-    Array.isArray(result.chords_timeline) &&
-    result.chords_timeline.length > 0
-  const hasNoChords =
-    !!result &&
-    Array.isArray(result.chords_timeline) &&
-    result.chords_timeline.length === 0
-
-  const totalDuration = hasChords
-    ? result.chords_timeline[result.chords_timeline.length - 1].time + 30
-    : 0
-
-  const uniqueChords =
-    result && Array.isArray(result.chords_timeline)
-      ? new Set(
-          result.chords_timeline.map((c) =>
-            transposeChord(c.chord, transposeBy)
-          )
-        ).size
-      : 0
+  function seek(time: number) {
+    seekRef.current?.(time);
+    setCurrentTime(time);
+  }
+  function exportChords() {
+    const content = [
+      `${result?.title || "ChordLens"}`,
+      `Capo: ${capo} · Transposición: ${shift} semitonos`,
+      "",
+      ...chords.map(
+        (c) => `${c.time_str}\t${transposeChord(c.chord, transposeBy)}`,
+      ),
+    ].join("\n");
+    const href = URL.createObjectURL(
+      new Blob([content], { type: "text/plain;charset=utf-8" }),
+    );
+    const link = document.createElement("a");
+    link.href = href;
+    link.download = "chordlens-acordes.txt";
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(href), 1000);
+  }
 
   return (
-    <div className="min-h-screen text-white flex flex-col">
-      <main className="flex-1">
-        {result?.warnings
-          ?.filter((warning) => warning.code.startsWith('YOUTUBE_COOKIES_'))
-          .map((warning) => (
-            <div
-              key={warning.code}
-              role="alert"
-              className="mx-auto mt-6 max-w-3xl rounded-xl border border-yellow-400/30 bg-yellow-400/10 px-4 py-3 text-sm text-yellow-200"
-            >
-              <p className="mb-1 font-semibold">
-                Actualizar cookies de YouTube
+    <main className="shell py-8 sm:py-12">
+      {!result ? (
+        <>
+          <section className="arrival grid items-center gap-12 py-4 lg:grid-cols-[1.05fr_1fr] lg:gap-20 lg:py-10">
+            <div>
+              <p className="eyebrow mb-6 flex items-center gap-2">
+                <span className="h-1.5 w-1.5 rounded-full bg-[#537548]" /> Tu
+                espacio para entender la música
               </p>
-              <p>{warning.message}</p>
-              <p className="mt-2">
-                El análisis pudo completarse, pero debes renovar la sesión para
-                próximas descargas.
+              <h1 className="max-w-xl text-[44px] font-extrabold leading-[1.07] tracking-[-.055em] sm:text-6xl lg:text-[68px]">
+                De escucharla
+                <br />a{" "}
+                <span className="relative inline-block text-[#68874d]">
+                  poder tocarla.
+                </span>
+              </h1>
+              <p className="muted mt-6 max-w-md text-base leading-7">
+                Encuentra los acordes de tu canción, sigue cada cambio y llévala
+                a tu instrumento. A tu ritmo.
               </p>
-            </div>
-          ))}
-        {/* ════════════════════════════════════
-            LANDING — sin resultados
-        ════════════════════════════════════ */}
-        {!result && (
-          <>
-            {/* Hero */}
-            <section className="min-h-[90vh] flex flex-col items-center justify-center px-4 sm:px-6 text-center">
-              <div className="max-w-3xl mx-auto flex flex-col items-center gap-8">
-                <div className="inline-flex items-center gap-2 bg-yellow-400/10 border border-yellow-400/20 rounded-full px-4 py-1.5 text-yellow-400 text-xs font-medium tracking-wider">
-                  <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse" />
-                  Análisis de audio con IA
+              <div id="analizar" className="panel mt-8 scroll-mt-28 p-5 sm:p-6">
+                <div
+                  className="mb-6 flex gap-1 rounded-xl bg-[#eff2e9] p-1"
+                  aria-label="Fuente de audio"
+                >
+                  <button
+                    disabled={!!step}
+                    aria-pressed={inputMode === "url"}
+                    onClick={() => setInputMode("url")}
+                    className={`flex flex-1 items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-xs font-bold ${inputMode === "url" ? "bg-white shadow-sm" : "muted"}`}
+                  >
+                    <Link2 size={16} /> YouTube
+                  </button>
+                  <button
+                    disabled={!!step}
+                    aria-pressed={inputMode === "file"}
+                    onClick={() => setInputMode("file")}
+                    className={`flex flex-1 items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-xs font-bold ${inputMode === "file" ? "bg-white shadow-sm" : "muted"}`}
+                  >
+                    <Upload size={16} /> Archivo de audio
+                  </button>
                 </div>
-
-                <h1 className="text-5xl sm:text-7xl font-black tracking-tighter leading-none">
-                  Descubre los acordesx3
-                  <br />
-                  <span className="text-yellow-400">de cualquier canción</span>
-                </h1>
-
-                <p className="text-white/40 text-lg max-w-md leading-relaxed">
-                  Pega una URL de YouTube y ChordLens analiza el audio para
-                  extraer los acordes reales, sincronizados con el video.
-                </p>
-
-                <div className="w-full max-w-xl flex flex-col gap-3">
-                  {/* Tab switcher */}
-                  <div className="flex rounded-xl bg-white/5 border border-white/10 p-1 gap-1">
-                    <button
-                      onClick={() => setInputMode('url')}
-                      className={`flex-1 py-2 rounded-lg text-xs font-semibold tracking-wider transition-all ${inputMode === 'url' ? 'bg-yellow-400 text-gray-950' : 'text-white/40 hover:text-white/70'}`}
+                {inputMode === "url" ? (
+                  <UrlInput
+                    url={url}
+                    onChange={setUrl}
+                    onSubmit={analyze}
+                    disabled={!!step}
+                  />
+                ) : (
+                  <div className="flex flex-col gap-3">
+                    <label
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        if (!step)
+                          setSelectedFile(e.dataTransfer.files[0] ?? null);
+                      }}
+                      className="relative flex cursor-pointer flex-col items-center gap-2 rounded-xl border border-dashed border-[#9aaf8f] bg-[#f7f9f2] px-4 py-6 text-center focus-within:outline focus-within:outline-2 focus-within:outline-[#4c856c]"
                     >
-                      URL de YouTube
-                    </button>
+                      <FileAudio size={25} className="mb-1 text-[#66824e]" />
+                      <span className="max-w-full truncate text-sm font-semibold">
+                        {selectedFile?.name || "Elige o arrastra tu archivo"}
+                      </span>
+                      <span className="muted text-[11px]">
+                        MP3, WAV, FLAC, M4A u OGG · hasta 50 MB
+                      </span>
+                      <input
+                        type="file"
+                        aria-label="Seleccionar archivo de audio"
+                        accept="audio/*,.m4a,.flac,.webm"
+                        disabled={!!step}
+                        onChange={(e) =>
+                          setSelectedFile(e.target.files?.[0] ?? null)
+                        }
+                        className="sr-only"
+                      />
+                    </label>
                     <button
-                      onClick={() => setInputMode('file')}
-                      className={`flex-1 py-2 rounded-lg text-xs font-semibold tracking-wider transition-all ${inputMode === 'file' ? 'bg-yellow-400 text-gray-950' : 'text-white/40 hover:text-white/70'}`}
+                      disabled={!!step || !selectedFile}
+                      onClick={analyze}
+                      className="btn-primary"
                     >
-                      Subir archivo
+                      Encontrar acordes <ArrowRight size={17} />
                     </button>
                   </div>
-
-                  {inputMode === 'url' ? (
-                    <UrlInput
-                      url={url}
-                      onChange={setUrl}
-                      onSubmit={handleAnalyze}
-                      disabled={step !== null}
-                    />
-                  ) : (
-                    <div className="flex gap-2 w-full">
-                      <label className="flex-1 flex items-center gap-3 px-4 py-3 rounded-xl bg-white/5 border border-white/10 cursor-pointer hover:border-yellow-400/40 transition-all text-sm">
-                        <span className="text-white/40 shrink-0">
-                          MP3 / WAV / FLAC
-                        </span>
-                        <span className="text-white truncate">
-                          {selectedFile ? (
-                            selectedFile.name
-                          ) : (
-                            <span className="text-white/20">
-                              Selecciona un archivo de audio...
-                            </span>
-                          )}
-                        </span>
-                        <input
-                          type="file"
-                          accept="audio/*"
-                          className="hidden"
-                          disabled={step !== null}
-                          onChange={(e) =>
-                            setSelectedFile(e.target.files?.[0] ?? null)
-                          }
-                        />
-                      </label>
-                      <button
-                        onClick={handleAnalyzeFile}
-                        disabled={step !== null || !selectedFile}
-                        className="px-5 py-3 rounded-xl bg-yellow-400 text-gray-950 font-bold text-sm tracking-widest hover:bg-yellow-300 active:scale-95 transition-all disabled:opacity-30 disabled:cursor-not-allowed whitespace-nowrap"
-                      >
-                        {step !== null ? '...' : 'ANALIZAR'}
-                      </button>
-                    </div>
-                  )}
-
-                  {step !== null && <ProgressSteps currentStep={step} />}
-                  {error && (
-                    <div
-                      role="alert"
-                      className="text-sm text-red-400 bg-red-950/40 border border-red-900/50 rounded-xl px-4 py-3 text-left"
-                    >
-                      {cookiesNeedUpdate && (
-                        <p className="mb-1 font-semibold">
-                          Actualizar cookies de YouTube
-                        </p>
-                      )}
-                      <p>{error}</p>
-                      {uploadSuggested && inputMode === 'url' && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setInputMode('file')
-                            setError(null)
-                            setUploadSuggested(false)
-                            setCookiesNeedUpdate(false)
-                          }}
-                          className="mt-3 rounded-lg bg-yellow-400 px-4 py-2 font-semibold text-gray-950"
+                )}
+                {step && (
+                  <div className="mt-4">
+                    <ProgressSteps currentStep={step} />
+                  </div>
+                )}
+                {error && (
+                  <div
+                    role="alert"
+                    className="mt-4 flex items-start gap-3 rounded-xl border border-[#e6bfb1] bg-[#fff3ed] p-4 text-sm text-[#8b442d]"
+                  >
+                    <TriangleAlert size={18} className="mt-0.5" />
+                    <div className="min-w-0 break-words">
+                      <p className="mb-1 font-bold">
+                        {error.code?.startsWith("YOUTUBE_COOKIES_")
+                          ? "Actualizar cookies de YouTube"
+                          : "No pudimos completar el análisis"}
+                      </p>
+                      <p className="text-xs leading-relaxed">{error.message}</p>
+                      {error.code?.startsWith("YOUTUBE_COOKIES_") && (
+                        <Link
+                          href="/ayuda#cookies"
+                          className="mt-3 block text-xs font-bold underline"
                         >
-                          Continuar con un archivo de audio
+                          Qué significa este aviso
+                        </Link>
+                      )}
+                      {error.fallback === "upload" && (
+                        <button
+                          className="mt-3 text-xs font-bold underline"
+                          onClick={() => {
+                            setInputMode("file");
+                            setError(null);
+                          }}
+                        >
+                          Continuar subiendo un archivo
                         </button>
                       )}
                     </div>
-                  )}
-                </div>
-
-                <p className="text-white/20 text-xs">
-                  El análisis tarda entre 30 y 90 segundos · YouTube o archivo
-                  local MP3/WAV/FLAC
-                </p>
-              </div>
-            </section>
-
-            {/* Cómo funciona */}
-            <section
-              id="como-funciona"
-              className="border-t border-white/5 py-14 sm:py-24 px-4 sm:px-6"
-            >
-              <div className="max-w-5xl mx-auto">
-                <div className="text-center mb-16">
-                  <p className="text-yellow-400 text-xs font-mono tracking-widest mb-3">
-                    PROCESO
-                  </p>
-                  <h2 className="text-3xl font-bold">Cómo funciona</h2>
-                </div>
-                <div className="grid sm:grid-cols-3 gap-8">
-                  {[
-                    {
-                      n: '01',
-                      icon: '🔗',
-                      title: 'Pega la URL',
-                      desc: 'Copia el link de cualquier video de YouTube y pégalo en el campo de búsqueda.',
-                    },
-                    {
-                      n: '02',
-                      icon: '🎵',
-                      title: 'Análisis de audio',
-                      desc: 'Descargamos el audio y usamos análisis de frecuencia para detectar las notas y acordes presentes.',
-                    },
-                    {
-                      n: '03',
-                      icon: '🎸',
-                      title: 'Visualiza los acordes',
-                      desc: 'Obtén un timeline sincronizado, mapa de acordes, transposición con capo y mucho más.',
-                    },
-                  ].map(({ n, icon, title, desc }) => (
-                    <div
-                      key={n}
-                      className="flex flex-col gap-4 p-6 rounded-2xl bg-white/3 border border-white/8 hover:border-white/15 transition-colors"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="text-3xl">{icon}</span>
-                        <span className="text-white/15 font-mono text-sm">
-                          {n}
-                        </span>
-                      </div>
-                      <div>
-                        <h3 className="font-bold text-white mb-1">{title}</h3>
-                        <p className="text-white/40 text-sm leading-relaxed">
-                          {desc}
-                        </p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </section>
-
-            {/* Features */}
-            <section className="border-t border-white/5 py-14 sm:py-24 px-4 sm:px-6">
-              <div className="max-w-5xl mx-auto">
-                <div className="text-center mb-10 sm:mb-16">
-                  <p className="text-yellow-400 text-xs font-mono tracking-widest mb-3">
-                    FUNCIONALIDADES
-                  </p>
-                  <h2 className="text-3xl font-bold">Todo lo que necesitas</h2>
-                </div>
-                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {[
-                    {
-                      icon: '🎹',
-                      title: 'Acordes reales',
-                      desc: 'Detecta los acordes del audio, no de la partitura. Lo que suena, no lo que está escrito.',
-                    },
-                    {
-                      icon: '🎸',
-                      title: 'Capo y transposición',
-                      desc: 'Selecciona el traste del capo y los acordes se adaptan automáticamente a las posiciones que tienes que tocar.',
-                    },
-                    {
-                      icon: '📊',
-                      title: 'Mapa visual',
-                      desc: 'Visualiza toda la canción en una barra de colores que muestra qué acorde suena en cada momento.',
-                    },
-                    {
-                      icon: '▶️',
-                      title: 'Sincronizado con video',
-                      desc: 'El acorde activo se resalta en tiempo real mientras el video se reproduce.',
-                    },
-                    {
-                      icon: '📝',
-                      title: 'Letra incluida',
-                      desc: 'Si está disponible, la letra de la canción aparece al lado del video para que puedas cantar.',
-                    },
-                    {
-                      icon: '⚡',
-                      title: 'Sin registro',
-                      desc: 'No hace falta cuenta, login ni pago. Solo pega la URL y listo.',
-                    },
-                  ].map(({ icon, title, desc }) => (
-                    <div
-                      key={title}
-                      className="flex gap-4 p-5 rounded-xl bg-white/3 border border-white/8"
-                    >
-                      <span className="text-2xl shrink-0">{icon}</span>
-                      <div>
-                        <h3 className="font-semibold text-sm text-white mb-1">
-                          {title}
-                        </h3>
-                        <p className="text-white/40 text-xs leading-relaxed">
-                          {desc}
-                        </p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </section>
-
-            {/* CTA bottom */}
-            <section className="border-t border-white/5 py-14 sm:py-24 px-4 sm:px-6 text-center">
-              <div className="max-w-xl mx-auto flex flex-col items-center gap-6">
-                <h2 className="text-3xl font-bold">¿Listo para empezar?</h2>
-                <p className="text-white/40 text-sm">
-                  Pega cualquier link de YouTube y descubre los acordes en
-                  segundos.
-                </p>
-                <UrlInput
-                  url={url}
-                  onChange={setUrl}
-                  onSubmit={handleAnalyze}
-                  disabled={step !== null}
-                />
-              </div>
-            </section>
-          </>
-        )}
-
-        {/* ════════════════════════════════════
-            RESULTADOS
-        ════════════════════════════════════ */}
-        {hasChords && (
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 sm:py-10 flex flex-col gap-8 sm:gap-12">
-            {/* Song header */}
-            <div className="flex items-start gap-4 justify-between flex-wrap">
-              <div className="min-w-0">
-                <p className="text-white/30 text-xs font-mono tracking-widest uppercase mb-1">
-                  Resultado del análisis
-                </p>
-                {result.title && (
-                  <h1 className="text-xl sm:text-3xl font-bold text-white leading-tight truncate">
-                    {result.title}
-                  </h1>
-                )}
-                {result.artist && (
-                  <p className="text-white/40 text-sm sm:text-base mt-1">
-                    {result.artist}
-                  </p>
-                )}
-              </div>
-            </div>
-
-            {/* Stats grid */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              {[
-                {
-                  label: 'Acordes detectados',
-                  value: result.chords_timeline.length,
-                  mono: true,
-                },
-                { label: 'Acordes únicos', value: uniqueChords, mono: true },
-                {
-                  label: 'Capo activo',
-                  value: capo === 0 ? 'Sin capo' : `Traste ${capo}`,
-                  mono: false,
-                },
-                {
-                  label: 'Transposición',
-                  value:
-                    transposeBy === 0
-                      ? 'Original'
-                      : `${transposeBy > 6 ? `−${12 - transposeBy}` : `+${transposeBy}`} semitonos`,
-                  mono: false,
-                },
-              ].map(({ label, value, mono }) => (
-                <div
-                  key={label}
-                  className="bg-white/3 border border-white/8 rounded-xl p-4 flex flex-col gap-2"
-                >
-                  <span className="text-[10px] text-white/30 uppercase tracking-wider">
-                    {label}
-                  </span>
-                  <span
-                    className={`text-xl font-bold text-white ${mono ? 'font-mono' : ''}`}
-                  >
-                    {value}
-                  </span>
-                </div>
-              ))}
-            </div>
-
-            {/* 01 — Reproducción */}
-            <section className="flex flex-col gap-0">
-              <SectionLabel number="01" title="Reproducción" />
-              <div
-                className={`grid gap-6 ${hasLyrics && videoId ? 'lg:grid-cols-[3fr_2fr]' : 'grid-cols-1 max-w-4xl'}`}
-              >
-                {videoId && (
-                  <YoutubePlayer
-                    key={videoId}
-                    videoId={videoId}
-                    onTimeUpdate={setCurrentTime}
-                    seekRef={seekRef}
-                  />
-                )}
-                {analyzedFile && !videoId && (
-                  <AudioPlayer
-                    key={analyzedFile.name}
-                    file={analyzedFile}
-                    onTimeUpdate={setCurrentTime}
-                    seekRef={seekRef}
-                  />
-                )}
-                {hasLyrics && videoId && (
-                  <LyricsDisplay
-                    artist={result.artist!}
-                    title={result.title!}
-                  />
-                )}
-              </div>
-            </section>
-
-            {/* 02 — Mapa de acordes */}
-            <section className="flex flex-col gap-0">
-              <SectionLabel number="02" title="Mapa de acordes" />
-              <ChordProgressBar
-                chords={result.chords_timeline}
-                totalDuration={totalDuration}
-                currentTime={currentTime}
-                transposeBy={transposeBy}
-                onSeek={(t) => seekRef.current?.(t)}
-              />
-            </section>
-
-            {/* 02b — Transcribir fragmento (solo con URL de YouTube) */}
-            {/* {videoId && analyzedUrl && (
-              <section className="flex flex-col gap-0">
-                <SectionLabel number="02b" title="Transcribir fragmento" />
-                <div className="bg-white/3 border border-white/8 rounded-2xl p-4 sm:p-6 flex flex-col gap-4">
-                  <RangeSelector
-                    totalDuration={totalDuration}
-                    currentTime={currentTime}
-                    onConfirm={handleTranscribe}
-                  />
-                  {transcribeError && (
-                    <div className="text-sm text-red-400 bg-red-950/40 border border-red-900/50 rounded-xl px-4 py-3">
-                      {transcribeError}
-                    </div>
-                  )}
-                  {(transcribing || transcription) && (
-                    <TranscriptionPanel
-                      data={transcription}
-                      loading={transcribing}
-                      currentTime={currentTime}
-                      rangeStart={soloRange?.start ?? 0}
-                    />
-                  )}
-                </div>
-              </section>
-            )} */}
-
-            {/* 03 — Transposición y acordes */}
-            <section className="flex flex-col gap-0">
-              <SectionLabel number="03" title="Transposición y acordes" />
-              <div className="grid md:grid-cols-[240px_1fr] lg:grid-cols-[300px_1fr] gap-4 sm:gap-6 items-start">
-                <TransposePanel
-                  capo={capo}
-                  shift={shift}
-                  onCapoChange={setCapo}
-                  onShiftChange={setShift}
-                />
-                <div className="bg-white/3 border border-white/8 rounded-2xl p-3 sm:p-6">
-                  <ChordTimeline
-                    chords={result.chords_timeline}
-                    currentTime={currentTime}
-                    transposeBy={transposeBy}
-                    totalDuration={totalDuration}
-                    onSeek={(t) => seekRef.current?.(t)}
-                  />
-                </div>
-              </div>
-            </section>
-
-            {/* 04 — Distribución */}
-            <section className="flex flex-col gap-0">
-              <SectionLabel number="04" title="Distribución de acordes" />
-              <div className="bg-white/3 border border-white/8 rounded-2xl p-6">
-                <ChordChart
-                  chords={result.chords_timeline}
-                  transposeBy={transposeBy}
-                />
-              </div>
-            </section>
-
-            {/* Nueva búsqueda */}
-            <section className="flex flex-col gap-0 pb-8">
-              <SectionLabel number="05" title="Analizar otra canción" />
-              <div className="max-w-xl flex flex-col gap-3">
-                <UrlInput
-                  url={url}
-                  onChange={setUrl}
-                  onSubmit={handleAnalyze}
-                  disabled={step !== null}
-                />
-                {step !== null && <ProgressSteps currentStep={step} />}
-                {error && (
-                  <div className="text-sm text-red-400 bg-red-950/40 border border-red-900/50 rounded-xl px-4 py-3">
-                    {error}
                   </div>
                 )}
+                <p className="muted mt-4 flex items-center justify-center gap-1.5 text-[10px]">
+                  <Check size={12} /> Sin registro{" "}
+                  <span className="mx-2 opacity-40">/</span> Estimaciones para
+                  practicar
+                </p>
               </div>
-            </section>
-          </div>
-        )}
-
-        {hasNoChords && (
-          <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 px-6 text-center">
-            <p className="text-white/20 text-lg">
-              No se detectaron acordes en este audio.
-            </p>
-            <p className="text-white/10 text-sm">
-              Probá con otro video o una canción con más instrumentos melódicos.
-            </p>
+            </div>
+            <div className="hero-grid relative rounded-[32px] border border-[#dce2d8] bg-[#edf1e7] p-6 sm:p-9">
+              <div className="mb-6 flex items-center justify-between">
+                <span className="eyebrow">Del audio a los acordes</span>
+                <span className="rounded-full border border-[#ccd8c3] px-2 py-1 text-[9px] font-bold uppercase tracking-widest">
+                  Ejemplo visual
+                </span>
+              </div>
+              <div className="rounded-2xl bg-[#284e3e] p-6 text-[#f4f6ee] shadow-[0_20px_45px_-25px_#173c2980]">
+                <p className="flex items-center gap-2 text-[10px] font-medium uppercase tracking-widest text-[#d9f58a]">
+                  <Headphones size={14} /> Una canción. Muchas posibilidades.
+                </p>
+                <div className="my-7 flex items-center justify-between">
+                  <div>
+                    <p className="text-xs text-[#c4d2c4]">Acorde actual</p>
+                    <p className="mt-2 font-mono text-7xl font-medium tracking-tighter">
+                      Am
+                    </p>
+                    <p className="mt-2 text-xs text-[#c4d2c4]">La menor</p>
+                  </div>
+                  <div className="rounded-xl bg-[#d9f58a] p-3 text-[#284e3e]">
+                    <ChordDiagram chord="Am" />
+                  </div>
+                </div>
+                <div className="grid grid-cols-4 gap-2">
+                  {["C", "Am", "F", "G"].map((c, i) => (
+                    <div
+                      key={c}
+                      className={`rounded-lg border p-3 ${i === 1 ? "border-[#d9f58a] bg-[#d9f58a] text-[#284e3e]" : "border-[#50705a] bg-[#355943]"}`}
+                    >
+                      <p className="mb-2 font-mono text-[9px] opacity-70">
+                        00:0{i * 2}
+                      </p>
+                      <p className="font-mono text-lg">{c}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="mt-5 flex items-center justify-between gap-4">
+                <p className="muted max-w-52 text-xs leading-relaxed">
+                  Una vista clara para saber qué tocar ahora y qué viene
+                  después.
+                </p>
+                <button
+                  disabled={!!step}
+                  onClick={() => {
+                    reset();
+                    setDemo(true);
+                    setResult(example);
+                  }}
+                  className="flex shrink-0 items-center gap-2 text-xs font-bold"
+                >
+                  Explorar <ArrowRight size={16} />
+                </button>
+              </div>
+            </div>
+          </section>
+          <section className="mt-10 grid gap-6 border-t border-[#dce2d8] py-10 sm:grid-cols-3">
+            {[
+              {
+                icon: AudioLines,
+                title: "Escucha los cambios",
+                text: "Recorre la canción y salta al momento que quieras practicar.",
+              },
+              {
+                icon: Guitar,
+                title: "Encuentra tu posición",
+                text: "Consulta diagramas, ajusta el capo y transporta los acordes.",
+              },
+              {
+                icon: ListMusic,
+                title: "Entiende la progresión",
+                text: "Mira la secuencia completa o céntrate en el acorde que está sonando.",
+              },
+            ].map(({ icon: Icon, title, text }) => (
+              <article key={title} className="flex items-start gap-4">
+                <span className="rounded-xl border border-[#dce2d8] bg-white p-3">
+                  <Icon size={21} />
+                </span>
+                <div>
+                  <h2 className="mb-2 text-sm font-extrabold">{title}</h2>
+                  <p className="muted text-xs leading-6">{text}</p>
+                </div>
+              </article>
+            ))}
+          </section>
+        </>
+      ) : (
+        <div className="arrival">
+          <div className="mb-7 flex flex-wrap items-center justify-between gap-4">
             <button
-              onClick={resetSearch}
-              className="mt-4 text-sm text-yellow-400 border border-yellow-400/30 rounded-lg px-4 py-2 hover:bg-yellow-400/10 transition-colors"
+              onClick={reset}
+              className="muted flex items-center gap-2 text-xs font-semibold"
             >
-              Intentar con otra canción
+              <ArrowLeft size={15} /> Otra canción
             </button>
+            <div className="flex items-center gap-2">
+              {demo && <span className="chip">Ejemplo visual · sin audio</span>}
+              <button
+                className="btn-soft !min-h-9 !px-3 !py-2 !text-xs"
+                onClick={exportChords}
+              >
+                <Download size={14} /> Exportar TXT
+              </button>
+            </div>
           </div>
-        )}
-      </main>
-    </div>
-  )
+          <div className="mb-8 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
+            <div>
+              <p className="eyebrow mb-3">Tu estudio de práctica</p>
+              <h1 className="max-w-3xl break-words text-3xl font-extrabold tracking-[-.04em] sm:text-4xl">
+                {result.title || "Tu canción"}
+              </h1>
+              <p className="muted mt-2 text-sm">
+                {result.artist ||
+                  (demo
+                    ? "Explora los diagramas y la transposición"
+                    : "Análisis de acordes")}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {result.key && (
+                <span className="chip">
+                  <Music2 size={13} />{" "}
+                  {result.key
+                    .replace("major", "mayor")
+                    .replace("minor", "menor")}
+                </span>
+              )}
+              {duration > 0 && (
+                <span className="chip">
+                  <Clock3 size={13} /> {timeLabel(duration)}
+                </span>
+              )}
+              <span className="chip">{unique} acordes</span>
+            </div>
+          </div>
+          {result.warnings?.map((warning, i) => (
+            <div
+              key={`${warning.code}-${i}`}
+              role="alert"
+              className="notice mb-5"
+            >
+              <TriangleAlert size={18} />
+              <div>
+                <p className="font-bold">
+                  {warning.code.startsWith("YOUTUBE_COOKIES_")
+                    ? "Actualizar cookies de YouTube"
+                    : "Información del análisis"}
+                </p>
+                <p>{warning.message}</p>
+              </div>
+            </div>
+          ))}
+          {result.model?.experimental && (
+            <div className="notice mb-5">
+              <Info size={18} />
+              <p>
+                Este análisis usa un modelo experimental. Revisa los acordes
+                escuchando la grabación.
+              </p>
+            </div>
+          )}
+          <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_320px] xl:grid-cols-[minmax(0,1fr)_350px]">
+            <div className="flex min-w-0 flex-col gap-6">
+              {chords.length > 0 ? (
+                <>
+                  <ChordProgressBar
+                    chords={chords}
+                    totalDuration={duration}
+                    currentTime={currentTime}
+                    transposeBy={transposeBy}
+                    onSeek={seek}
+                  />
+                </>
+              ) : (
+                <div className="panel p-10 text-center">
+                  <AudioLines className="mx-auto mb-4" />
+                  <h2 className="section-title">
+                    No encontramos acordes claros
+                  </h2>
+                  <p className="muted mt-3 text-sm">
+                    Prueba una grabación donde los instrumentos se escuchen
+                    mejor.
+                  </p>
+                </div>
+              )}
+              <p className="muted flex items-start gap-2 text-xs leading-relaxed">
+                <Info size={14} className="mt-0.5" /> La secuencia es una
+                estimación del audio. Los números identifican cambios, no
+                compases.
+              </p>
+            </div>
+            <aside className="contents lg:sticky lg:top-24 lg:flex lg:min-w-0 lg:flex-col lg:gap-5">
+              {(videoId || analyzedFile) && (
+                <section className="panel -order-1 overflow-hidden lg:order-none">
+                  <div className="flex items-center gap-2 p-4 text-xs font-bold">
+                    <Headphones size={16} /> Escucha y acompaña
+                  </div>
+                  {videoId ? (
+                    <YoutubePlayer
+                      videoId={videoId}
+                      onTimeUpdate={setCurrentTime}
+                      onDuration={setPlayerDuration}
+                      seekRef={seekRef}
+                    />
+                  ) : analyzedFile ? (
+                    <AudioPlayer
+                      file={analyzedFile}
+                      onTimeUpdate={setCurrentTime}
+                      onDuration={setPlayerDuration}
+                      seekRef={seekRef}
+                    />
+                  ) : null}
+                </section>
+              )}
+              <TransposePanel
+                capo={capo}
+                shift={shift}
+                onCapoChange={setCapo}
+                onShiftChange={setShift}
+              />
+              <ChordChart
+                chords={chords}
+                transposeBy={transposeBy}
+                totalDuration={duration}
+              />
+              {result.artist && result.title && (
+                <section className="panel p-5">
+                  <button
+                    onClick={() => setLyricsOpen(!lyricsOpen)}
+                    aria-expanded={lyricsOpen}
+                    className="flex w-full items-center justify-between text-sm font-bold"
+                  >
+                    <span className="flex items-center gap-2">
+                      <BookOpen size={16} /> Letra de la canción
+                    </span>
+                    <ArrowRight
+                      size={15}
+                      className={lyricsOpen ? "rotate-90" : ""}
+                    />
+                  </button>
+                  {lyricsOpen && (
+                    <div className="mt-4">
+                      <LyricsDisplay
+                        key={`${result.artist}-${result.title}`}
+                        artist={result.artist}
+                        title={result.title}
+                      />
+                    </div>
+                  )}
+                </section>
+              )}
+            </aside>
+          </div>
+        </div>
+      )}
+    </main>
+  );
 }

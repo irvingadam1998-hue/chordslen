@@ -1,0 +1,6 @@
+{
+  "features": {"representation": "cqt", "bins_per_octave": 36, "hop_length": 512, "chroma": true, "bass": true},
+  "model": {"temporal": "bilstm", "channels": 12, "embedding": 64, "layers": 1, "dropout": 0.3, "bass_head": true},
+  "train": {"batch_size": 8, "segment_seconds": 8, "num_epochs": 60, "patience": 60, "weight_decay": 0.01, "pitch_shift": 6},
+  "decode": {"switch_cost": 2, "key_prior_weight": 0, "bass_threshold": 0.8}
+}

@@ -3,6 +3,9 @@ export interface ChordEvent {
   time_str: string
   chord: string
   measure: number
+  end?: number
+  confidence?: number
+  bass?: string | null
 }
 
 export interface TranscriptionNote {
@@ -36,5 +39,10 @@ export interface AnalysisResult {
   title?: string
   artist?: string
   error?: string
+  duration?: number
+  key?: string
+  engine?: 'current' | 'neural'
+  model?: { experimental?: boolean; mode?: string }
+  timings?: Record<string, number>
   warnings?: { code: string; message: string }[]
 }

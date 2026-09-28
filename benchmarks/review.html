@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>__TITLE__ · Revisión de acordes</title>
+<style>
+:root{font-family:system-ui,sans-serif;color:#20372f;background:#f5f5f0;line-height:1.5}
+*{box-sizing:border-box}body{max-width:1100px;margin:0 auto;padding:28px 20px 70px}
+h1{font-size:clamp(24px,4vw,36px);margin:4px 0}h2{font-size:20px}p{max-width:85ch}
+.panel{background:white;border:1px solid #dce3dc;border-radius:16px;padding:22px;margin:18px 0}
+.muted{color:#52645c}.badge{font-size:12px;text-transform:uppercase;letter-spacing:.1em}
+audio{width:100%;margin:12px 0}.controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+button,input,select,textarea{font:inherit}button{background:#294e3e;color:white;border:0;border-radius:8px;padding:9px 14px;cursor:pointer}
+button.secondary{background:#edf1ea;color:#20372f}input,select{padding:8px;border:1px solid #b9c7bd;border-radius:6px}
+input[type=number]{width:125px}textarea{width:100%;min-height:220px;font:14px/1.6 ui-monospace,monospace;padding:14px;border:1px solid #b9c7bd;border-radius:8px;margin:14px 0}
+table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;padding:10px;border-bottom:1px solid #e5eae3}
+.scroll{overflow:auto;max-height:550px}summary{cursor:pointer;font-weight:650}code,output{font-family:ui-monospace,monospace}
+:focus-visible{outline:3px solid #6d9178;outline-offset:3px}.error{color:#a22b22}
+@media(max-width:600px){body{padding:16px 10px}.panel{padding:15px}th,td{padding:7px}}
+</style>
+</head>
+<body>
+<p class="badge">Prueba local · Referencia pendiente</p><h1>__TITLE__</h1>
+<p>Escucha y anota el acompañamiento. Las predicciones están ocultas inicialmente para reducir la influencia del modelo en tu revisión. No hay una medición de precisión hasta disponer de una referencia revisada.</p>
+<section class="panel"><h2>Audio original</h2><audio id="audio" src="audio.wav" controls preload="metadata"></audio>
+<div class="controls"><output id="clock">0.000 s</output><label>Velocidad <select id="speed"><option value="0.75">0,75×</option><option value="1" selected>1×</option><option value="1.25">1,25×</option></select></label></div>
+<p class="muted" id="playback" role="status"></p></section>
+<section class="panel"><h2>Tu referencia, con tiempos</h2>
+<p>Formato: <code>inicio fin acorde</code>, en segundos. Ejemplos de símbolos: <code>Am</code>, <code>Fmaj7</code>, <code>G7/B</code>. <code>X</code> significa sin revisar; <code>N</code>, ausencia de acorde. Marca los cambios que escuches, aunque no coincidan con el modelo.</p>
+<div class="controls"><label>Inicio <input id="start" type="number" min="0" step="0.001" value="0"></label><button id="mark-start" class="secondary">Marcar inicio actual</button><label>Fin <input id="end" type="number" min="0" step="0.001"></label><button id="mark-end" class="secondary">Marcar fin actual</button><label>Acorde <input id="chord" size="8" placeholder="Am"></label><button id="add">Añadir tramo</button><button id="listen" class="secondary">Escuchar tramo</button></div>
+<textarea id="lab" aria-label="Anotaciones LAB" spellcheck="false" placeholder="# Añade únicamente tramos revisados; los huecos quedan desconocidos."></textarea>
+<div class="controls"><button id="export">Descargar referencia.lab</button><label>Importar LAB <input id="import" type="file" accept=".lab,.txt"></label></div>
+<p id="status" role="status" class="muted">No se completan huecos con predicciones ni se guardan anotaciones automáticamente.</p></section>
+<details class="panel"><summary>Ver predicciones y tramos ambiguos</summary>
+<p>Los porcentajes de séptimas describen la salida, no su exactitud. Las probabilidades no están calibradas: una probabilidad alta no garantiza un acorde correcto.</p>
+<div id="stats" class="scroll"></div><label>Salida <select id="engine"></select></label>
+<h2>Secuencia detectada</h2><div id="timeline" class="scroll"></div>
+<h2>Tramos para revisar primero</h2><p class="muted">Ordenados por poca separación entre alternativas. Son dudas, no errores confirmados.</p><div id="ambiguities" class="scroll"></div>
+</details>
+<script id="report" type="application/json">__REPORT_JSON__</script>
+<script>
+const report=JSON.parse(document.getElementById('report').textContent),audio=document.getElementById('audio');
+const byId=id=>document.getElementById(id);let stopAt=null;
+const number=n=>Number(n).toFixed(3),percent=n=>(n*100).toFixed(1)+'%';
+function notice(text,error=false){byId('status').textContent=text;byId('status').className=error?'error':'muted'}
+audio.addEventListener('timeupdate',()=>{byId('clock').textContent=number(audio.currentTime)+' s';if(stopAt!==null&&audio.currentTime>=stopAt){audio.pause();stopAt=null}});
+audio.addEventListener('error',()=>{byId('playback').textContent='No se pudo abrir audio.wav. Conserva este HTML junto al audio del experimento.'});
+byId('speed').onchange=e=>{audio.playbackRate=Number(e.target.value)};
+function play(start,end){stopAt=end;audio.currentTime=start;audio.play().catch(()=>{byId('playback').textContent='Pulsa reproducir en el audio para habilitar la escucha.'})}
+byId('mark-start').onclick=()=>{byId('start').value=number(audio.currentTime)};
+byId('mark-end').onclick=()=>{byId('end').value=number(audio.currentTime)};
+function validRange(start,end){return Number.isFinite(start)&&Number.isFinite(end)&&start>=0&&end>start&&end<=report.duration_seconds+0.001}
+byId('listen').onclick=()=>{const a=Number(byId('start').value),b=Number(byId('end').value);if(validRange(a,b))play(a,b);else notice('Revisa inicio y fin del tramo.',true)};
+byId('add').onclick=()=>{const a=Number(byId('start').value),b=Number(byId('end').value),name=byId('chord').value.trim();if(!validRange(a,b)||!name||/\s/.test(name)){notice('Indica un tramo válido y un símbolo de acorde.',true);return}byId('lab').value+=`${number(a)} ${number(b)} ${name}\n`;byId('start').value=number(b);notice('Tramo añadido. Revisa el orden y evita solapamientos antes de exportar.')};
+function download(text,name){const url=URL.createObjectURL(new Blob([text],{type:'text/plain;charset=utf-8'})),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}
+byId('export').onclick=()=>{try{let last=0,count=0;for(const line of byId('lab').value.split('\n')){if(!line.trim()||line.trim().startsWith('#'))continue;const fields=line.trim().split(/\s+/),a=Number(fields[0]),b=Number(fields[1]);if(fields.length!==3||!validRange(a,b)||a<last-0.00001)throw Error('Hay un tramo inválido, desordenado o solapado.');last=b;count++}if(!count)throw Error('Todavía no hay tramos anotados.');download(byId('lab').value,'referencia.lab');notice('Referencia exportada. Usa score para medirla; todavía no se ha validado la sintaxis de cada acorde.')}catch(e){notice(e.message,true)}};
+byId('import').onchange=async e=>{const file=e.target.files[0];if(file){byId('lab').value=await file.text();notice('Referencia importada; revisa tiempos y símbolos.')}};
+function table(container,headers,rows){const t=document.createElement('table'),h=document.createElement('tr');for(const label of headers){const c=document.createElement('th');c.textContent=label;h.append(c)}t.append(h);for(const row of rows){const tr=document.createElement('tr');for(const value of row){const td=document.createElement('td');if(value instanceof Node)td.append(value);else td.textContent=String(value);tr.append(td)}t.append(tr)}byId(container).replaceChildren(t)}
+function listenButton(a,b){const button=document.createElement('button');button.textContent='Escuchar';button.className='secondary';button.onclick=()=>play(a,b);return button}
+table('stats',['Salida','Eventos','Tiempo con séptimas'],Object.entries(report.summary).map(([name,s])=>[name,s.events,percent(s.seventh_fraction)]));
+for(const name of Object.keys(report.results)){const option=document.createElement('option');option.value=name;option.textContent=name;byId('engine').append(option)}
+function show(){const name=byId('engine').value,timeline=report.results[name]?.chords_timeline||[];table('timeline',['Inicio','Fin','Acorde',''],timeline.map((e,i)=>[number(e.time),number(e.end??timeline[i+1]?.time??report.duration_seconds),e.chord,listenButton(e.time,e.end??timeline[i+1]?.time??report.duration_seconds)]));table('ambiguities',['Inicio','Fin','Predicción','Alternativas sin calibrar',''],(report.ambiguities[name]||[]).slice(0,30).map(e=>[number(e.start),number(e.end),e.prediction,e.alternatives.map(a=>a.chord+' '+percent(a.probability)).join(' · '),listenButton(e.start,e.end)]))}
+byId('engine').onchange=show;show();
+</script></body></html>

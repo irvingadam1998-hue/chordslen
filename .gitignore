@@ -31,6 +31,12 @@ node_modules/
 __pycache__/
 *.pyc
 
+# ACR: datos, features, checkpoints e informes de experimentos locales
+/data/
+/experiments/
+*.pt
+*.pth
+
 # debug
 npm-debug.log*
 yarn-debug.log*

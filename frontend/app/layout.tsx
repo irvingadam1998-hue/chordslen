@@ -1,23 +1,24 @@
 import type { Metadata } from 'next'
-import { Geist, Geist_Mono } from 'next/font/google'
+import { Manrope, IBM_Plex_Mono } from 'next/font/google'
 import './globals.css'
 import Navbar from '@/components/Navbar'
 import Footer from '@/components/Footer'
 
-const geistSans = Geist({
-  variable: '--font-geist-sans',
+const manrope = Manrope({
+  variable: '--font-sans',
   subsets: ['latin'],
 })
 
-const geistMono = Geist_Mono({
-  variable: '--font-geist-mono',
+const mono = IBM_Plex_Mono({
+  variable: '--font-mono',
+  weight: ['400', '500', '600'],
   subsets: ['latin'],
 })
 
 export const metadata: Metadata = {
   title: 'ChordLens — Extractor de Acordes desde YouTube',
   description:
-    'Detectá los acordes reales de cualquier canción en YouTube. Análisis de audio con IA, sincronizado con el video.',
+    'Explora los acordes de tu música, sigue la progresión y encuentra una forma cómoda de tocar. Analiza un enlace de YouTube o tu archivo de audio.',
 }
 
 export default function RootLayout({
@@ -28,11 +29,16 @@ export default function RootLayout({
   return (
     <html
       lang="es"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${manrope.variable} ${mono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col bg-[#080808] text-white">
+      <body className="min-h-full flex flex-col">
+        <a href="#contenido" className="skip-link">
+          Saltar al contenido
+        </a>
         <Navbar />
-        <div className="flex-1 flex flex-col pt-14">{children}</div>
+        <div id="contenido" className="flex-1 flex flex-col">
+          {children}
+        </div>
         <Footer />
       </body>
     </html>

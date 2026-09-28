@@ -1,0 +1,6 @@
+{
+  "features": {"representation": "cqt", "bins_per_octave": 12, "hop_length": 512, "chroma": true},
+  "model": {"temporal": "bilstm", "channels": 16, "embedding": 96, "layers": 1},
+  "train": {"batch_size": 8, "segment_seconds": 2, "num_epochs": 60},
+  "decode": {"switch_cost": 2, "key_prior_weight": 0}
+}

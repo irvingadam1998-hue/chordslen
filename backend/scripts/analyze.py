@@ -3,6 +3,7 @@ import sys
 import json
 import os
 import tempfile
+from pathlib import Path
 from time import perf_counter
 try:
     from .youtube import download_audio, YouTubeError
@@ -268,7 +269,7 @@ def _harmonic_chroma(y, sr, hop_length):
     return chroma
 
 
-def _analyze_audio(audio_path, title='', artist=''):
+def _analyze_audio(audio_path, title='', artist='', max_duration=None):
     """Analyze a local audio file and return the chord timeline."""
     analysis_started = perf_counter()
     try:
@@ -288,14 +289,13 @@ def _analyze_audio(audio_path, title='', artist=''):
 
     templates = make_chord_templates()
 
-    MAX_DURATION = 360
     try:
         # Accessing librosa.load triggers lazy imports and Numba initialization.
         # Measure that separately from actually decoding/resampling the file.
         load_audio = librosa.load
         load_started = perf_counter()
         sys.stderr.write('[analyze] loading audio with librosa...\n')
-        y, sr = load_audio(audio_path, sr=22050, mono=True, duration=MAX_DURATION)
+        y, sr = load_audio(audio_path, sr=22050, mono=True, duration=max_duration)
         sys.stderr.write(f'[analyze] loaded audio: samples={len(y)}, sr={sr}\n')
     except Exception as e:
         return {"success": False, "error": f"Error al cargar el audio: {str(e)}"}
@@ -482,6 +482,8 @@ def _analyze_audio(audio_path, title='', artist=''):
         "artist": artist,
         "key": f"{NOTE_NAMES[key_root]} {key_mode}",
         "timings": timings,
+        "duration": len(y) / sr,
+        "engine": "current",
     }
 
 
@@ -529,36 +531,100 @@ def validate_result(result, expected_str):
     return result
 
 
-def analyze_file_path(path):
+def _engine_options(engine=None, mode=None, checkpoint=None):
+    engine = (engine or os.environ.get('ACR_ENGINE', 'auto')).lower()
+    mode = (mode or os.environ.get('ACR_MODE', 'accurate')).lower()
+    if engine not in {'auto', 'current', 'neural'} or mode not in {'fast', 'accurate'}:
+        raise ValueError('ACR_ENGINE debe ser auto/current/neural; ACR_MODE fast/accurate')
+    if os.environ.get('ACR_VOCABULARY', 'full') not in {'', 'full', 'triads'}:
+        raise ValueError('ACR_VOCABULARY debe ser full o triads')
+    checkpoint = checkpoint or os.environ.get(f'ACR_MODEL_PATH_{mode.upper()}') or os.environ.get('ACR_MODEL_PATH')
+    return engine, mode, checkpoint
+
+
+def analysis_cache_namespace():
+    """Changing a model/profile must not reuse results from the previous engine."""
+    import hashlib
+    engine, mode, checkpoint = _engine_options()
+    version = 'absent'
+    if checkpoint and Path(checkpoint).is_file():
+        stat = Path(checkpoint).stat()
+        version = f'{Path(checkpoint).resolve()}:{stat.st_mtime_ns}:{stat.st_size}'
+    vocabulary = os.environ.get('ACR_VOCABULARY', '')
+    return hashlib.sha256(f'acr-v2:{engine}:{mode}:{version}:{os.environ.get("ACR_ALLOW_EXPERIMENTAL", "0")}:{vocabulary}'.encode()).hexdigest()[:20]
+
+
+def _analyze_with_engine(path, title='', artist='', engine=None, mode=None, checkpoint=None):
+    try:
+        engine, mode, checkpoint = _engine_options(engine, mode, checkpoint)
+    except ValueError as exc:
+        return {'success': False, 'error': str(exc)}
+    reason = None
+    if engine != 'current' and checkpoint and Path(checkpoint).is_file():
+        try:
+            # Also works when the worker imports this script directly from scripts/.
+            root = str(Path(__file__).resolve().parents[2])
+            if root not in sys.path:
+                sys.path.insert(0, root)
+            from backend.model.inference import analyze_neural
+            return analyze_neural(path, checkpoint, title=title, artist=artist, mode=mode,
+                                  allow_experimental=os.environ.get('ACR_ALLOW_EXPERIMENTAL') == '1',
+                                  vocabulary=os.environ.get('ACR_VOCABULARY') or None)
+        except Exception as exc:
+            # Includes optional dependency, incompatible weights and runtime failures.
+            # Never silently label a fallback result as a neural prediction.
+            reason = 'El modelo neuronal no pudo utilizarse; se usó el detector actual.'
+            sys.stderr.write(f'[acr] neural fallback: {type(exc).__name__}: {exc}\n')
+    elif engine == 'neural' or (engine == 'auto' and checkpoint):
+        reason = 'No se encontró el modelo neuronal configurado; se usó el detector actual.'
+    result = _analyze_audio(path, title=title, artist=artist)
+    if reason:
+        result.setdefault('warnings', []).append({'code': 'ACR_NEURAL_FALLBACK', 'message': reason})
+    return result
+
+
+def analyze_file_path(path, *, engine=None, mode=None, checkpoint=None):
     """Analyze a local audio file directly (no YouTube download needed)."""
     if not os.path.isfile(path):
         return {"success": False, "error": f"Archivo no encontrado: {path}"}
     title = os.path.splitext(os.path.basename(path))[0]
-    return _analyze_audio(path, title=title, artist='')
+    return _analyze_with_engine(path, title=title, artist='', engine=engine, mode=mode, checkpoint=checkpoint)
 
 
-def analyze_url(url):
+def analyze_url(url, *, engine=None, mode=None, checkpoint=None):
     started = perf_counter()
     try:
         with tempfile.TemporaryDirectory(prefix='chordlens_analysis_') as tmpdir:
             notices = []
             audio_path, title, artist = download_audio(url, tmpdir, notices=notices)
             downloaded = perf_counter()
-            result = _analyze_audio(audio_path, title=title, artist=artist)
+            result = _analyze_with_engine(audio_path, title=title, artist=artist,
+                                          engine=engine, mode=mode, checkpoint=checkpoint)
             result.setdefault('timings', {}).update({
                 'download_seconds': round(downloaded - started, 3),
                 'total_seconds': round(perf_counter() - started, 3),
             })
             sys.stderr.write(f'[analyze] timings={json.dumps(result["timings"])}\n')
             if notices:
-                result['warnings'] = notices
+                result.setdefault('warnings', []).extend(notices)
             return result
     except YouTubeError as exc:
         return exc.result()
 
 
-if __name__ == '__main__':
+def main():
     args = sys.argv[1:]
+
+    # New optional flags leave the existing positional URL/--file/--validate CLI intact.
+    for flag, variable in (('--engine', 'ACR_ENGINE'), ('--mode', 'ACR_MODE'),
+                           ('--checkpoint', 'ACR_MODEL_PATH')):
+        if flag in args:
+            idx = args.index(flag)
+            if idx + 1 >= len(args):
+                print(json.dumps({'success': False, 'error': f'Falta valor para {flag}'}))
+                sys.exit(1)
+            os.environ[variable] = args[idx + 1]
+            args = args[:idx] + args[idx + 2:]
 
     if not args:
         print(json.dumps({"success": False, "error": (
@@ -591,3 +657,7 @@ if __name__ == '__main__':
 
     sys.stdout.buffer.write(json.dumps(result, ensure_ascii=True).encode('ascii'))
     sys.stdout.buffer.write(b'\n')
+
+
+if __name__ == '__main__':
+    main()

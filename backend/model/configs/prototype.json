@@ -1,0 +1,6 @@
+{
+  "features": {"representation": "cqt", "bins_per_octave": 36, "hop_length": 512},
+  "model": {"temporal": "none", "channels": 8, "embedding": 64, "dropout": 0.1},
+  "train": {"batch_size": 4, "segment_seconds": 4, "num_epochs": 8, "patience": 4},
+  "decode": {"switch_cost": 2, "key_prior_weight": 0}
+}

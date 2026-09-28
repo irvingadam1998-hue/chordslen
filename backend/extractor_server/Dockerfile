@@ -10,12 +10,13 @@ COPY backend/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 ENV NUMBA_CPU_NAME=generic \
     NUMBA_CACHE_DIR=/opt/chordlens/numba-cache
-COPY backend/scripts ./scripts
+COPY backend/scripts ./backend/scripts
+COPY backend/model ./backend/model
 # Cache is baked into the image, so a free instance restart does not discard it.
 # Generic CPU code can be reused on build/runtime hosts with different CPU models.
-RUN python scripts/warm_audio.py
-COPY backend/extractor_server ./extractor_server
-WORKDIR /app/extractor_server
+RUN python backend/scripts/warm_audio.py
+COPY backend/extractor_server ./backend/extractor_server
+WORKDIR /app/backend/extractor_server
 ENV PORT=5002
 EXPOSE 5002
 # Jobs and the YouTube cooldown share one process; threads serve polling/uploads.

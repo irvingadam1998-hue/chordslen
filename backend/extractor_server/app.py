@@ -17,7 +17,7 @@ from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.utils import secure_filename
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
-from analyze import analyze_url, analyze_file_path
+from analyze import analyze_url, analyze_file_path, analysis_cache_namespace
 from transcribe import transcribe as transcribe_fragment
 from youtube import download_audio, extract_video_id, validate_range, YouTubeError, cooldown_remaining
 try:
@@ -132,7 +132,7 @@ def analyze():
     video_id = extract_video_id(url)
     if not video_id:
         return _error('Introduce un enlace válido de un video de YouTube.', code='INVALID_URL')
-    return _start_job(f'analyze:v1:{video_id}', analyze_url, (url,))
+    return _start_job(f'analyze:{analysis_cache_namespace()}:{video_id}', analyze_url, (url,))
 
 
 @app.route('/status/<job_id>')

@@ -1,82 +1,80 @@
 'use client'
-
-interface TransposePanelProps {
+import { Minus, Plus, RotateCcw, SlidersHorizontal } from 'lucide-react'
+export default function TransposePanel({
+  capo,
+  shift,
+  onCapoChange,
+  onShiftChange,
+}: {
   capo: number
   shift: number
   onCapoChange: (v: number) => void
   onShiftChange: (v: number) => void
-}
-
-export default function TransposePanel({ capo, shift, onCapoChange, onShiftChange }: TransposePanelProps) {
-  const totalShift = ((shift - capo) % 12 + 12) % 12
-  const shiftLabel = shift > 0 ? `+${shift}` : shift < 0 ? `${shift}` : '0'
-
+}) {
   return (
-    <div className="bg-white/3 border border-white/8 rounded-2xl p-5 flex flex-col gap-5">
-      <h3 className="text-xs font-semibold tracking-widest text-white/30 uppercase">Transposición</h3>
-
-      {/* Capo */}
-      <div className="flex flex-col gap-2">
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-white/60">Capo</span>
-          <span className="text-xs text-white/30">
-            {capo === 0 ? 'sin capo' : `traste ${capo}`}
-          </span>
-        </div>
-        <div className="flex gap-1 flex-wrap">
+    <section className="panel p-5">
+      <h2 className="mb-5 flex items-center gap-2 text-sm font-extrabold">
+        <SlidersHorizontal size={17} /> A tu manera
+      </h2>
+      <div className="flex items-center justify-between gap-3">
+        <label htmlFor="capo" className="text-sm">
+          Capo
+        </label>
+        <select
+          id="capo"
+          value={capo}
+          onChange={(e) => onCapoChange(Number(e.target.value))}
+          className="field max-w-36"
+        >
           {Array.from({ length: 12 }, (_, i) => (
-            <button
-              key={i}
-              onClick={() => onCapoChange(i)}
-              className={`w-8 h-8 rounded-lg text-xs font-mono font-bold transition-all ${
-                capo === i
-                  ? 'bg-yellow-400 text-gray-950'
-                  : 'bg-white/5 text-white/40 hover:bg-white/10 hover:text-white/70'
-              }`}
-            >
-              {i}
-            </button>
+            <option key={i} value={i}>
+              {i ? `Traste ${i}` : 'Sin capo'}
+            </option>
           ))}
-        </div>
+        </select>
       </div>
-
-      {/* Semitone shift */}
-      <div className="flex flex-col gap-2">
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-white/60">Transportar</span>
-          <span className="text-xs text-white/30">{shiftLabel} semitonos</span>
-        </div>
-        <div className="flex items-center gap-2">
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+        <span className="text-sm">Transportar</span>
+        <div className="flex items-center gap-1">
           <button
+            className="icon-btn"
+            aria-label="Bajar un semitono"
+            disabled={shift <= -12}
             onClick={() => onShiftChange(shift - 1)}
-            className="w-8 h-8 rounded-lg bg-white/5 text-white/60 hover:bg-white/10 hover:text-white text-lg font-bold transition-all"
-          >−</button>
-          <div className="flex-1 bg-white/5 rounded-lg h-8 flex items-center justify-center">
-            <span className="text-sm font-mono text-yellow-400 font-bold">{shiftLabel}</span>
-          </div>
+          >
+            <Minus size={16} />
+          </button>
+          <output
+            className="w-10 text-center font-mono text-sm"
+            aria-live="polite"
+          >
+            {shift > 0 ? '+' : ''}
+            {shift}
+          </output>
           <button
+            className="icon-btn"
+            aria-label="Subir un semitono"
+            disabled={shift >= 12}
             onClick={() => onShiftChange(shift + 1)}
-            className="w-8 h-8 rounded-lg bg-white/5 text-white/60 hover:bg-white/10 hover:text-white text-lg font-bold transition-all"
-          >+</button>
-          {(capo !== 0 || shift !== 0) && (
-            <button
-              onClick={() => { onCapoChange(0); onShiftChange(0) }}
-              className="px-3 h-8 rounded-lg bg-white/5 text-white/30 hover:text-white/60 text-xs transition-all"
-            >
-              reset
-            </button>
-          )}
+          >
+            <Plus size={16} />
+          </button>
         </div>
       </div>
-
-      {/* Summary */}
+      <p className="muted mt-4 text-[11px] leading-relaxed">
+        Cambia las posiciones mostradas. El tono de la grabación se mantiene.
+      </p>
       {(capo !== 0 || shift !== 0) && (
-        <div className="text-xs text-white/20 bg-white/3 rounded-lg px-3 py-2">
-          Transposición neta: <span className="text-yellow-400 font-mono font-bold">
-            {totalShift === 0 ? '0' : totalShift > 6 ? `−${12 - totalShift}` : `+${totalShift}`} semitonos
-          </span>
-        </div>
+        <button
+          className="mt-3 flex items-center gap-2 text-xs font-bold"
+          onClick={() => {
+            onCapoChange(0)
+            onShiftChange(0)
+          }}
+        >
+          <RotateCcw size={13} /> Restaurar original
+        </button>
       )}
-    </div>
+    </section>
   )
 }

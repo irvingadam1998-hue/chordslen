@@ -1,166 +1,328 @@
-'use client'
+"use client";
+import { memo, useEffect, useRef, useState } from "react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Guitar,
+  Grid2X2,
+  LocateFixed,
+  ListMusic,
+  Radio,
+} from "lucide-react";
+import type { ChordEvent } from "@/lib/types";
+import { transposeChord } from "@/lib/transpose";
+import {
+  activeChordIndex,
+  chordEnd,
+  chordProgress,
+  chordTimeLabel,
+} from "@/lib/chord-timing";
+import ChordDiagram from "./ChordDiagram";
+import ChordSymbol, { type ChordNotation } from "./ChordSymbol";
+import ChordTimeline from "./ChordTimeline";
 
-import { ChordEvent } from '@/lib/types'
-import { transposeChord } from '@/lib/transpose'
-// @ts-ignore
-import Guitar from '@tombatossals/react-chords/lib/Chord'
-import guitarChords from '@tombatossals/chords-db/lib/guitar.json'
+const Diagram = memo(ChordDiagram);
 
-interface ChordProgressBarProps {
-  chords: ChordEvent[]
-  totalDuration: number
-  currentTime: number
-  transposeBy: number
-  onSeek?: (time: number) => void
-}
+export default function ChordProgressBar({
+  chords,
+  totalDuration,
+  currentTime,
+  transposeBy,
+  onSeek,
+}: {
+  chords: ChordEvent[];
+  totalDuration: number;
+  currentTime: number;
+  transposeBy: number;
+  onSeek?: (time: number) => void;
+}) {
+  const [view, setView] = useState<"diagrams" | "grid">("diagrams");
+  const [mode, setMode] = useState<"animated" | "summary">("animated");
+  const [notation, setNotation] = useState<ChordNotation>("letters");
+  const [follow, setFollow] = useState(true);
+  const strip = useRef<HTMLDivElement>(null);
+  const activeDiagram = useRef<HTMLButtonElement>(null);
+  const track = useRef<HTMLDivElement>(null);
+  const activeMarker = useRef<HTMLButtonElement>(null);
+  const active = activeChordIndex(chords, currentTime, totalDuration);
+  const nextIndex = chords.findIndex((chord) => chord.time > currentTime);
+  const previousIndex =
+    active >= 0 ? active - 1 : nextIndex >= 0 ? nextIndex - 1 : chords.length - 1;
+  const currentName =
+    active >= 0 ? transposeChord(chords[active].chord, transposeBy) : null;
+  const unique = Array.from(
+    new Set(chords.map((chord) => transposeChord(chord.chord, transposeBy))),
+  );
+  const entries =
+    mode === "animated"
+      ? chords.map((event, index) => ({
+          event,
+          index,
+          name: transposeChord(event.chord, transposeBy),
+        }))
+      : unique.map((name) => {
+          const first = chords.findIndex(
+            (event) => transposeChord(event.chord, transposeBy) === name,
+          );
+          return { event: chords[first], index: first, name };
+        });
 
-const NOTE_COLORS: Record<string, string> = {
-  'C': '#ef4444', 'C#': '#f97316', 'D': '#f59e0b', 'D#': '#eab308',
-  'E': '#84cc16', 'F': '#22c55e', 'F#': '#10b981', 'G': '#06b6d4',
-  'G#': '#3b82f6', 'A': '#6366f1', 'A#': '#a855f7', 'B': '#ec4899',
-}
+  useEffect(() => {
+    if (!follow || active < 0) return;
+    const pairs = [
+      [track.current, activeMarker.current],
+      [strip.current, activeDiagram.current],
+    ] as const;
+    for (const [frame, cell] of pairs) {
+      if (!frame || !cell) continue;
+      if (frame === strip.current && mode === "summary") continue;
+      const outer = frame.getBoundingClientRect();
+      const inner = cell.getBoundingClientRect();
+      frame.scrollTo({
+        left: Math.max(
+          0,
+          frame.scrollLeft +
+            inner.left -
+            outer.left -
+            (frame.clientWidth - inner.width) * 0.38,
+        ),
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+          ? "instant"
+          : "smooth",
+      });
+    }
+  }, [active, follow, mode, view, transposeBy]);
 
-const instrument = {
-  strings: 6,
-  fretsOnChord: 4,
-  name: 'Guitar',
-  keys: [],
-  tunings: { standard: ['E', 'A', 'D', 'G', 'B', 'E'] },
-}
-
-function noteToDbKey(note: string) {
-  return note.replace('#', 'sharp').replace('b', 'flat')
-}
-
-function parseChord(chord: string) {
-  const rootMatch = chord.match(/^[A-G][#b]?/)
-  if (!rootMatch) return { root: chord, suffix: 'major' }
-  const root = rootMatch[0]
-  const suffixMap: Record<string, string> = {
-    '': 'major', 'maj': 'major', 'm': 'minor', 'min': 'minor',
-    '7': '7', 'm7': 'm7', 'maj7': 'maj7', 'M7': 'maj7',
-    'sus2': 'sus2', 'sus4': 'sus4', 'add9': 'add9',
-    'dim': 'dim', 'aug': 'aug', '6': '6', 'm6': 'm6',
-    '9': '9', 'm9': 'm9', '11': '11', '13': '13', '5': '5', '7sus4': '7sus4',
+  if (!chords.length) return null;
+  function navigate(index: number) {
+    if (index < 0 || index >= chords.length) return;
+    setFollow(true);
+    onSeek?.(chords[index].time);
   }
-  const suffix = chord.slice(root.length)
-  return { root, suffix: suffixMap[suffix] ?? (suffix || 'major') }
-}
-
-function getChordPosition(chordName: string) {
-  const { root, suffix } = parseChord(chordName)
-  const group = (guitarChords.chords as Record<string, any[]>)[noteToDbKey(root)]
-  if (!group) return null
-  const match = group.find((c: any) => c.suffix === suffix) ?? group[0]
-  return match?.positions?.[0] ?? null
-}
-
-function getColor(chord: string): string {
-  const notes = ['C#', 'D#', 'F#', 'G#', 'A#', 'C', 'D', 'E', 'F', 'G', 'A', 'B']
-  for (const n of notes) if (chord.startsWith(n)) return NOTE_COLORS[n] ?? '#6b7280'
-  return '#6b7280'
-}
-
-export default function ChordProgressBar({ chords, totalDuration, currentTime, transposeBy, onSeek }: ChordProgressBarProps) {
-  if (!chords.length || !totalDuration) return null
-
-  const segments = chords.map((chord, i) => {
-    const start = chord.time
-    const end = i + 1 < chords.length ? chords[i + 1].time : totalDuration
-    const width = ((end - start) / totalDuration) * 100
-    const transposed = transposeChord(chord.chord, transposeBy)
-    return { start, end, width, chord: transposed, original: chord }
-  })
-
-  const progress = totalDuration > 0 ? (currentTime / totalDuration) * 100 : 0
-
-  const activeIdx = segments.reduce((acc, seg, i) => currentTime >= seg.start ? i : acc, -1)
-  const activeChord = activeIdx >= 0 ? segments[activeIdx].chord : null
-  const nextChord = activeIdx >= 0 && activeIdx + 1 < segments.length ? segments[activeIdx + 1].chord : null
 
   return (
-    <div className="flex flex-col gap-2">
-      <h2 className="text-xs font-semibold tracking-widest text-white/30 uppercase">Mapa de acordes</h2>
-      <div
-        className="relative w-full h-10 rounded-xl overflow-hidden flex cursor-pointer"
-        onClick={(e) => {
-          const rect = e.currentTarget.getBoundingClientRect()
-          const pct = (e.clientX - rect.left) / rect.width
-          onSeek?.(pct * totalDuration)
-        }}
-      >
-        {segments.map((seg, i) => (
-          <div
-            key={i}
-            title={`${seg.chord} — ${seg.original.time_str}`}
-            style={{ width: `${seg.width}%`, backgroundColor: getColor(seg.chord) + '55', borderRight: '1px solid rgba(0,0,0,0.3)' }}
-            className="relative h-full flex items-center justify-center overflow-hidden group hover:brightness-125 transition-all"
-          >
-            {seg.width > 3 && (
-              <span className="text-[10px] font-mono font-bold text-white/80 truncate px-1 pointer-events-none">
-                {seg.chord}
+    <section
+      className="practice-player"
+      aria-label="Reproductor visual de acordes"
+    >
+      <div className="practice-heading">
+        <div className="flex items-center gap-2.5">
+          <span className="practice-live-dot" />
+          <h2 className="text-sm font-extrabold">Toca con la canción</h2>
+        </div>
+        <span className="font-mono text-[11px] opacity-70">
+          {chordTimeLabel(Math.max(0, currentTime))}
+          {totalDuration > 0 ? ` / ${chordTimeLabel(totalDuration)}` : ""}
+        </span>
+      </div>
+      <div className="practice-track-frame">
+        <button
+          className="practice-track-arrow"
+          onClick={() => navigate(previousIndex)}
+          disabled={previousIndex < 0}
+          aria-label="Acorde anterior"
+        >
+          <ChevronLeft size={18} />
+        </button>
+        <div
+          ref={track}
+          className="practice-track"
+          onWheel={() => setFollow(false)}
+          onTouchMove={() => setFollow(false)}
+        >
+          {chords.map((event, index) => (
+            <button
+              key={`${event.time}-${index}`}
+              ref={index === active ? activeMarker : undefined}
+              aria-current={index === active ? "true" : undefined}
+              aria-label={`${transposeChord(event.chord, transposeBy)}, ${chordTimeLabel(event.time, true)}`}
+              className={`practice-marker ${index === active ? "is-active" : ""}`}
+              onClick={() => navigate(index)}
+            >
+              <ChordSymbol
+                chord={transposeChord(event.chord, transposeBy)}
+                notation={notation}
+                className="text-[23px] font-semibold"
+              />
+              <span className="mt-1 font-mono text-[9px] opacity-55">
+                {chordTimeLabel(event.time, true)}
               </span>
-            )}
-          </div>
-        ))}
-
-        {/* Playhead */}
-        {currentTime >= 0 && (
+              {index === active && (
+                <span
+                  className="practice-marker-progress"
+                  style={{
+                    transform: `scaleX(${chordProgress(chords, index, currentTime, totalDuration)})`,
+                  }}
+                />
+              )}
+            </button>
+          ))}
+        </div>
+        <button
+          className="practice-track-arrow"
+          onClick={() => navigate(nextIndex)}
+          disabled={nextIndex < 0}
+          aria-label="Siguiente acorde"
+        >
+          <ChevronRight size={18} />
+        </button>
+      </div>
+      <div className="practice-toolbar">
+        <div
+          className="practice-tabs"
+          role="group"
+          aria-label="Vista de práctica"
+        >
+          <button
+            onClick={() => setView("diagrams")}
+            aria-pressed={view === "diagrams"}
+          >
+            <Guitar size={16} /> Diagramas
+          </button>
+          <button
+            onClick={() => setView("grid")}
+            aria-pressed={view === "grid"}
+          >
+            <Grid2X2 size={16} /> Cuadrícula
+          </button>
+        </div>
+        {view === "diagrams" && (
           <div
-            className="absolute top-0 bottom-0 w-0.5 bg-white shadow-[0_0_6px_rgba(255,255,255,0.8)] pointer-events-none z-10"
-            style={{ left: `${Math.min(progress, 100)}%` }}
-          />
+            className="practice-mode"
+            role="group"
+            aria-label="Modo de diagramas"
+          >
+            <button
+              onClick={() => setMode("animated")}
+              aria-pressed={mode === "animated"}
+            >
+              <Radio size={14} /> Animado
+            </button>
+            <button
+              onClick={() => setMode("summary")}
+              aria-pressed={mode === "summary"}
+            >
+              <ListMusic size={14} /> Resumen
+            </button>
+          </div>
         )}
       </div>
-      {/* Diagramas acorde actual + siguiente */}
-      {activeChord && (
-        <div className="flex items-end gap-6 py-3 px-4 rounded-2xl bg-white/3 border border-white/8 mt-1">
-          <div className="flex flex-col gap-1">
-            <span className="text-[10px] font-mono text-white/30 tracking-widest uppercase">Ahora</span>
-            <div className="flex flex-col items-center gap-1.5">
-              <div className="rounded-xl p-2" style={{ backgroundColor: getColor(activeChord) + '15', border: `1px solid ${getColor(activeChord)}35` }}>
-                {getChordPosition(activeChord) ? (
-                  <div style={{ width: 80 }}>
-                    <Guitar chord={getChordPosition(activeChord)} instrument={instrument} lite={false} />
-                  </div>
-                ) : (
-                  <div className="flex items-center justify-center font-mono font-bold text-sm" style={{ width: 80, height: 100, color: getColor(activeChord) }}>
-                    {activeChord}
-                  </div>
-                )}
-              </div>
-              <span className="text-sm font-bold font-mono" style={{ color: getColor(activeChord) }}>{activeChord}</span>
-            </div>
+      {view === "diagrams" ? (
+        <>
+          <div className="practice-diagram-caption">
+            <span>
+              Guitarra ·{" "}
+              {mode === "animated"
+                ? "Acorde actual y próximos cambios"
+                : `${unique.length} acordes en esta canción`}
+            </span>
+            <label className="flex items-center gap-2">
+              <span className="sr-only">Notación de acordes</span>
+              <select
+                aria-label="Notación de acordes"
+                value={notation}
+                onChange={(event) =>
+                  setNotation(event.target.value as ChordNotation)
+                }
+              >
+                <option value="letters">C, D, E</option>
+                <option value="solfege">Do, Re, Mi</option>
+              </select>
+            </label>
           </div>
-
-          <span className="text-white/15 text-xl mb-8 select-none">→</span>
-
-          {nextChord ? (
-            <div className="flex flex-col gap-1 opacity-45">
-              <span className="text-[10px] font-mono text-white/30 tracking-widest uppercase">Siguiente</span>
-              <div className="flex flex-col items-center gap-1.5">
-                <div className="rounded-xl p-2" style={{ backgroundColor: getColor(nextChord) + '15', border: `1px solid ${getColor(nextChord)}35` }}>
-                  {getChordPosition(nextChord) ? (
-                    <div style={{ width: 80 }}>
-                      <Guitar chord={getChordPosition(nextChord)} instrument={instrument} lite={false} />
-                    </div>
-                  ) : (
-                    <div className="flex items-center justify-center font-mono font-bold text-sm" style={{ width: 80, height: 100, color: getColor(nextChord) }}>
-                      {nextChord}
-                    </div>
+          <div
+            ref={strip}
+            className={`practice-diagrams ${mode === "summary" ? "is-summary" : ""}`}
+            onWheel={() => setFollow(false)}
+            onTouchMove={() => setFollow(false)}
+          >
+            {entries.map(({ event, index, name }) => {
+              const isActive =
+                mode === "animated" ? index === active : currentName === name;
+              const played =
+                mode === "animated" &&
+                currentTime >= chordEnd(chords, index, totalDuration);
+              const occurrences =
+                mode === "summary"
+                  ? chords.filter(
+                      (chord) =>
+                        transposeChord(chord.chord, transposeBy) === name,
+                    ).length
+                  : 0;
+              return (
+                <button
+                  key={`${mode}-${index}`}
+                  ref={isActive ? activeDiagram : undefined}
+                  onClick={() => navigate(index)}
+                  aria-current={isActive ? "true" : undefined}
+                  aria-label={`Diagrama de ${name === "N" ? "sin acorde" : name}. Ir a ${chordTimeLabel(event.time, true)}`}
+                  className={`practice-diagram ${isActive ? "is-active" : ""} ${played ? "is-played" : ""}`}
+                >
+                  <span className="practice-diagram-meta">
+                    {isActive
+                      ? "Actual"
+                      : mode === "summary"
+                        ? `${occurrences} ${occurrences === 1 ? "vez" : "veces"}`
+                        : chordTimeLabel(event.time, true)}
+                  </span>
+                  <div className="practice-fretboard">
+                    <Diagram chord={name} />
+                  </div>
+                  <ChordSymbol
+                    chord={name}
+                    notation={notation}
+                    className="practice-chord-label"
+                  />
+                  {isActive && mode === "animated" && (
+                    <span
+                      className="practice-diagram-progress"
+                      style={{
+                        transform: `scaleX(${chordProgress(chords, active, currentTime, totalDuration)})`,
+                      }}
+                    />
                   )}
-                </div>
-                <span className="text-sm font-bold font-mono" style={{ color: getColor(nextChord) }}>{nextChord}</span>
-              </div>
-            </div>
-          ) : (
-            <div className="flex flex-col gap-1 opacity-20">
-              <span className="text-[10px] font-mono text-white/30 tracking-widest uppercase">Siguiente</span>
-              <div className="flex items-center justify-center font-mono text-xs text-white/20" style={{ width: 80, height: 100 }}>—</div>
-            </div>
-          )}
+                </button>
+              );
+            })}
+          </div>
+        </>
+      ) : (
+        <ChordTimeline
+          chords={chords}
+          currentTime={currentTime}
+          transposeBy={transposeBy}
+          onSeek={onSeek}
+          totalDuration={totalDuration}
+          notation={notation}
+          embedded
+          followPlayback={follow}
+          onFollowChange={setFollow}
+        />
+      )}
+      <div className="practice-footer">
+        <p>Selecciona un acorde para ir a ese momento.</p>
+        <button
+          onClick={() => setFollow(!follow)}
+          aria-pressed={follow}
+          className={follow ? "is-following" : ""}
+        >
+          <LocateFixed size={14} />{" "}
+          {follow ? "Siguiendo la canción" : "Reanudar seguimiento"}
+        </button>
+      </div>
+      {totalDuration > 0 && (
+        <div className="practice-scrubber">
+          <input
+            aria-label="Posición en la canción"
+            type="range"
+            min={0}
+            max={totalDuration}
+            step={0.05}
+            value={Math.max(0, Math.min(currentTime, totalDuration))}
+            onChange={(event) => onSeek?.(Number(event.target.value))}
+          />
         </div>
       )}
-    </div>
-  )
+    </section>
+  );
 }

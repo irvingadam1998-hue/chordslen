@@ -1,93 +1,29 @@
 import Link from 'next/link'
-
-const columns = [
-  {
-    heading: 'Herramientas',
-    links: [
-      { href: '/', label: 'Detector de acordes' },
-      { href: '/afinador', label: 'Afinador' },
-    ],
-  },
-  // {
-  //   heading: 'Legal',
-  //   links: [
-  //     { href: '/privacidad', label: 'Privacidad' },
-  //     { href: '/terminos', label: 'Términos' },
-  //   ],
-  // },
-  // {
-  //   heading: 'Tecnología',
-  //   links: [
-  //     { href: 'https://github.com/yt-dlp/yt-dlp', label: 'yt-dlp', external: true },
-  //     { href: 'https://librosa.org', label: 'librosa', external: true },
-  //     { href: 'https://nextjs.org', label: 'Next.js', external: true },
-  //   ],
-  // },
-]
-
+import { AudioLines } from 'lucide-react'
 export default function Footer() {
   return (
-    <footer className="border-t border-white/5 bg-[#080808] pt-12 pb-8 px-6">
-      <div className="max-w-7xl mx-auto">
-        {/* Top section */}
-        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-8 mb-10">
-          {/* Brand */}
-          <div className="flex flex-col gap-3 max-w-xs">
-            <Link href="/" className="flex items-center gap-2.5 group w-fit">
-              <div className="w-7 h-7 rounded-lg bg-yellow-400 flex items-center justify-center shrink-0">
-                <span className="text-gray-950 font-black text-sm">♪</span>
-              </div>
-              <span className="font-bold tracking-tight text-white group-hover:text-yellow-400 transition-colors">
-                ChordLens
-              </span>
-            </Link>
-            <p className="text-white/30 text-sm leading-relaxed max-w-xs">
-              Detecta los acordes de cualquier canción.
-            </p>
-          </div>
-
-          {/* Link columns */}
-          <div className="flex flex-wrap gap-10 sm:gap-12">
-          {columns.map((col) => (
-            <div key={col.heading} className="flex flex-col gap-3">
-              <p className="text-white/60 text-xs font-semibold tracking-widest uppercase">
-                {col.heading}
-              </p>
-              <ul className="flex flex-col gap-2">
-                {col.links.map((link) => (
-                  <li key={link.href}>
-                    {'external' in link && link.external ? (
-                      <a
-                        href={link.href}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-white/30 text-sm hover:text-white/70 transition-colors"
-                      >
-                        {link.label}
-                      </a>
-                    ) : (
-                      <Link
-                        href={link.href}
-                        className="text-white/30 text-sm hover:text-white/70 transition-colors"
-                      >
-                        {link.label}
-                      </Link>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
-          </div>
-        </div>
-
-        {/* Bottom bar */}
-        <div className="border-t border-white/5 pt-6 flex flex-col sm:flex-row items-center justify-between gap-3 text-white/20 text-xs">
-          <p>© 2025 ChordLens · Todos los derechos reservados.</p>
-          <p className="text-center sm:text-right">
-            Los acordes son aproximados según análisis de audio.
+    <footer className="mt-auto border-t border-[#dce2d8] py-9">
+      <div className="shell flex flex-col justify-between gap-6 sm:flex-row sm:items-center">
+        <div>
+          <p className="mb-2 flex items-center gap-2 text-sm font-extrabold">
+            <AudioLines size={18} /> chordlens.
           </p>
+          <p className="muted text-xs">Escucha. Entiende. Toca.</p>
         </div>
+        <nav
+          aria-label="Enlaces del pie"
+          className="flex flex-wrap gap-x-6 gap-y-3 text-xs font-semibold"
+        >
+          <Link href="/nosotros">El proyecto</Link>
+          <Link href="/blog">Aprender</Link>
+          <Link href="/ayuda">Ayuda</Link>
+          <Link href="/precios">Disponibilidad</Link>
+          <Link href="/privacidad">Privacidad</Link>
+        </nav>
+        <p className="muted max-w-[220px] text-xs leading-relaxed">
+          Las estimaciones de acordes son una guía. Tu oído tiene la última
+          palabra.
+        </p>
       </div>
     </footer>
   )

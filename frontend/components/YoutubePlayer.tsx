@@ -14,6 +14,7 @@ declare global {
 
 interface YTPlayer {
   getCurrentTime: () => number
+  getDuration: () => number
   seekTo: (seconds: number, allowSeekAhead: boolean) => void
   destroy: () => void
 }
@@ -21,10 +22,16 @@ interface YTPlayer {
 interface YoutubePlayerProps {
   videoId: string
   onTimeUpdate: (time: number) => void
+  onDuration?: (time: number) => void
   seekRef: React.MutableRefObject<((time: number) => void) | null>
 }
 
-export default function YoutubePlayer({ videoId, onTimeUpdate, seekRef }: YoutubePlayerProps) {
+export default function YoutubePlayer({
+  videoId,
+  onTimeUpdate,
+  onDuration,
+  seekRef,
+}: YoutubePlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const playerRef = useRef<YTPlayer | null>(null)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -39,8 +46,10 @@ export default function YoutubePlayer({ videoId, onTimeUpdate, seekRef }: Youtub
         playerVars: { autoplay: 0, modestbranding: 1, rel: 0 },
         events: {
           onReady: () => {
+            onDuration?.(playerRef.current?.getDuration() || 0)
             seekRef.current = (time: number) => {
               playerRef.current?.seekTo(time, true)
+              onTimeUpdate(time)
             }
             intervalRef.current = setInterval(() => {
               if (playerRef.current?.getCurrentTime) {
@@ -69,10 +78,13 @@ export default function YoutubePlayer({ videoId, onTimeUpdate, seekRef }: Youtub
       playerRef.current?.destroy()
       seekRef.current = null
     }
-  }, [videoId])
+  }, [videoId, onTimeUpdate, onDuration, seekRef])
 
   return (
-    <div className="w-full rounded-xl overflow-hidden bg-gray-900 border border-gray-800" style={{ aspectRatio: '16/9' }}>
+    <div
+      className="w-full overflow-hidden bg-[#213e35]"
+      style={{ aspectRatio: '16/9' }}
+    >
       <div ref={containerRef} className="w-full h-full" />
     </div>
   )
