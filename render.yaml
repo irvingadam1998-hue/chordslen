@@ -24,3 +24,11 @@ services:
         value: '900'
       - key: MAX_UPLOAD_MB
         value: '50'
+      - key: ACR_ENGINE
+        value: neural
+      - key: ACR_MODE
+        value: accurate
+      - key: ACR_VOCABULARY
+        value: triads
+      - key: ACR_MODEL_PATH
+        value: /app/checkpoints/candidate.pt

@@ -36,6 +36,7 @@ __pycache__/
 /experiments/
 *.pt
 *.pth
+!/backend/checkpoints/candidate.pt
 
 # debug
 npm-debug.log*

@@ -8,6 +8,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certi
 WORKDIR /app
 COPY backend/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
+COPY backend/requirements-neural.txt /app/requirements-neural.txt
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu "torch>=2.9,<3" \
+    && pip install --no-cache-dir -r /app/requirements-neural.txt
+COPY backend/checkpoints/candidate.pt /app/checkpoints/candidate.pt
 ENV NUMBA_CPU_NAME=generic \
     NUMBA_CACHE_DIR=/opt/chordlens/numba-cache
 COPY backend/scripts ./backend/scripts
